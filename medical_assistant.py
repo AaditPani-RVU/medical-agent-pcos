@@ -35,28 +35,65 @@ tavily_search = TavilySearch(
     include_domains=TRUSTED_DOMAINS
 )
 
+# Initialize LLM early so we can use it in search verification
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Temperature 0 to reduce hallucination
+
+def verify_source_content(query: str, url: str, content: str) -> bool:
+    """
+    Uses the LLM to verify if a single piece of retrieved content is actually relevant
+    and reliable for the specific conditions mentioned in the user's query.
+    """
+    verification_prompt = f"""
+    You are a medical content verifier. Your job is to determine if the provided text 
+    contains reliable, factual information that specifically addresses the conditions or 
+    symptoms mentioned in the user's query.
+    
+    User Query: "{query}"
+    Source URL: {url}
+    Content to verify: 
+    {content}
+    
+    Does this content contain specific, factual, and relevant health information about 
+    the conditions mentioned in the query? 
+    Respond with ONLY 'YES' or 'NO'.
+    """
+    try:
+        response = llm.invoke(verification_prompt).content.strip().upper()
+        return response.startswith('YES')
+    except Exception:
+        # Default to false if verification fails to enforce strict reliability
+        return False
+
 def search_trusted_sources(query: str) -> dict:
-    """Perform search and return structured results with context and source URLs."""
+    """Perform search, verify results, and return structured context and source URLs."""
     print(f"\n[Searching Trusted Sources: {query}]...")
     try:
         raw_results = tavily_search.invoke({"query": query})
-        # TavilySearch returns a dict with 'results' key containing the list
         results = raw_results.get('results', []) if isinstance(raw_results, dict) else raw_results
-        # Build context string for the LLM and collect source URLs
+        
         context_parts = []
         source_urls = []
-        for i, doc in enumerate(results, 1):
+        valid_source_count = 1
+        
+        print("[Verifying Source Reliability]...")
+        for doc in results:
             url = doc.get('url', 'Unknown source')
             content = doc.get('content', '')
-            context_parts.append(f"[Source {i}]: {url}\nContent: {content}")
-            source_urls.append(url)
+            
+            # Reliability Check: Is this specific snippet actually relevant/factual?
+            if verify_source_content(query, url, content):
+                context_parts.append(f"[Source {valid_source_count}]: {url}\nContent: {content}")
+                source_urls.append(url)
+                valid_source_count += 1
+            else:
+                print(f"  - Filtered out irrelevant/unreliable source: {url}")
 
         context = "\n\n".join(context_parts) if context_parts else \
-            "No highly relevant information found in the trusted medical domains for this query."
+            "No highly relevant, verified information found in the trusted medical domains for these specific conditions."
 
         return {"context": context, "source_urls": source_urls}
     except Exception as e:
-        print(f"Error during search: {e}")
+        print(f"Error during search/verification: {e}")
         return {"context": "Search failed. Please try again later.", "source_urls": []}
 
 # --- 3. The Strict System Prompt ---
@@ -64,7 +101,8 @@ system_prompt = """You are an assistant for a healthcare information platform.
 Your role is to respond to user disease-related inquiries by providing contextually relevant health information only.
 
 You must:
-- Present verified health content related to the disease being inquired about.
+- Extract all specific conditions or symptoms mentioned in the user's query.
+- Present verified health content explicitly structured **condition by condition** (e.g., using headers for each condition like "### Hypertension" and "### Diabetes").
 - Ensure all information is informational and educational, not diagnostic or prescriptive.
 - Prioritize source credibility, using ONLY the context provided below which comes from verified doctors, medical professionals, and trusted health influencers/institutions.
 - Maintain strict contextual relevance to the user's query.
@@ -85,7 +123,7 @@ You must not:
 
 If the answer to the user's inquiry is not contained within the Provided Context, you must state that you do not have enough verified information to answer, and recommend they speak with a healthcare provider.
 
-Provided Context (Verified Sources):
+Provided Context (Verified Sources only):
 {context}
 """
 
@@ -94,8 +132,7 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "{query}")
 ])
 
-# --- 4. Initialize LLM ---
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Temperature 0 to reduce hallucination
+# LLM initialized above for use in verification
 
 # --- 5. Main Interaction Function ---
 def ask_health_assistant(query: str):
