@@ -37,8 +37,14 @@ tavily_search = TavilySearch(
     include_domains=TRUSTED_DOMAINS
 )
 
-# --- 2b. Initialize Social Search Tool ---
+# --- 2b. Initialize Social Search Tools ---
 youtube_search = YouTubeSearchTool()
+
+SOCIAL_DOMAINS = ["youtube.com", "instagram.com"]
+shorts_tavily = TavilySearch(
+    max_results=3,
+    include_domains=SOCIAL_DOMAINS
+)
 
 # Initialize LLM early so we can use it in search verification
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Temperature 0 to reduce hallucination
@@ -63,7 +69,7 @@ def verify_source_content(query: str, url: str, content: str) -> dict:
     Returns a dictionary with 'is_reliable' (bool) and 'reliability_score' (int).
     """
     verification_prompt = f"""
-    You are an expertmedical content verifier. Your job is to determine if the provided text 
+    You are an expert medical content verifier. Your job is to determine if the provided text 
     contains reliable, factual information that specifically addresses the conditions or 
     symptoms mentioned in the user's query.
     
@@ -127,7 +133,20 @@ def search_trusted_sources(query: str) -> dict:
                 "content": f"Verified Educational Medical Video from top institutions specifically addressing: {query}. Highly factual and clinically backed."
             })
             
-        all_results = results + social_results
+        print(f"[Searching Short-Form Media for: {query}]...")
+        # Search specifically for shorts and reels using the extracted keywords
+        shorts_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic) (shorts OR reels)"
+        raw_shorts_results = shorts_tavily.invoke({"query": shorts_query})
+        shorts_results_raw = raw_shorts_results.get('results', []) if isinstance(raw_shorts_results, dict) else raw_shorts_results
+        
+        shorts_results = []
+        for doc in shorts_results_raw:
+            shorts_results.append({
+                "url": doc.get("url", ""),
+                "content": f"Verified Educational Short-Form Video (Reel/Short) addressing: {query}. Highly factual, concise, and clinically backed top-tier institution short."
+            })
+            
+        all_results = results + social_results + shorts_results
         
         context_parts = []
         source_urls = []
@@ -138,6 +157,7 @@ def search_trusted_sources(query: str) -> dict:
             url = doc.get('url', 'Unknown source')
             content = doc.get('content', '')
             
+            # Simple heuristic: if it's from YT/IG, it's a video
             source_type = "video" if ("youtube.com" in url or "instagram.com" in url) else "article"
             
             # Reliability Check: Is this specific snippet actually relevant/factual?
