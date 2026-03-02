@@ -135,10 +135,8 @@ prompt = ChatPromptTemplate.from_messages([
 # LLM initialized above for use in verification
 
 # --- 5. Main Interaction Function ---
-def ask_health_assistant(query: str):
-    """Main function to interact with the assistant."""
-    print("=" * 60)
-    print(f"USER QUERY: {query}")
+def ask_health_assistant(query: str) -> dict:
+    """Main function to interact with the assistant. Returns dict with response and sources."""
     try:
         # Step 1: Search trusted sources
         search_results = search_trusted_sources(query)
@@ -152,19 +150,18 @@ def ask_health_assistant(query: str):
         response = llm.invoke(formatted_prompt)
         response_text = response.content
 
-        # Step 4: Display the response
-        print("\n--- ASSISTANT RESPONSE ---\n")
-        print(response_text)
-
-        # Step 5: Display verified source URLs for transparency
-        if source_urls:
-            print("\n--- VERIFIED SOURCES ---")
-            for i, url in enumerate(source_urls, 1):
-                print(f"  [Source {i}]: {url}")
-
-        print("\n" + "=" * 60 + "\n")
+        return {
+            "response": response_text,
+            "sources": source_urls
+        }
+        
     except Exception as e:
-        print(f"\nSystem Error: Please ensure your API keys are set correctly. Error details: {e}")
+        error_msg = f"System Error: Please ensure your API keys are set correctly. Error details: {e}"
+        print(f"\n{error_msg}")
+        return {
+            "response": error_msg,
+            "sources": []
+        }
 
 # --- 6. Interactive Testing Loop ---
 if __name__ == "__main__":
