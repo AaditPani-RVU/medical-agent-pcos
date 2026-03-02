@@ -21,9 +21,14 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     query: str
 
+class SourceItem(BaseModel):
+    url: str
+    score: int
+    type: str
+
 class ChatResponse(BaseModel):
     response: str
-    sources: list[str]
+    sources: list[SourceItem]
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):

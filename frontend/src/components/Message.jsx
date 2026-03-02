@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, User, ExternalLink } from 'lucide-react';
+import { Bot, User, ExternalLink, PlaySquare } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -73,23 +73,48 @@ const Message = ({ role, content, sources = [] }) => {
         {/* Sources */}
         {!isUser && sources && sources.length > 0 && (
           <div className="mt-2 flex flex-col gap-2 w-full">
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">Verified Sources</h4>
+            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">Verified Sources & Content Score</h4>
             <div className="flex flex-wrap gap-2">
-              {sources.map((url, idx) => (
-                <a 
-                  key={idx}
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800/60 border border-slate-700/60 rounded-full text-xs text-blue-300 hover:text-blue-200 hover:bg-slate-700/80 hover:border-blue-500/50 transition-all duration-200 shadow-sm"
-                  title={url}
-                >
-                  <ExternalLink size={12} />
-                  <span className="truncate max-w-[150px]">
-                    {new URL(url).hostname.replace('www.', '')}
-                  </span>
-                </a>
-              ))}
+              {sources.map((src, idx) => {
+                const url = typeof src === 'string' ? src : src.url;
+                const score = typeof src === 'string' ? null : src.score;
+                const type = typeof src === 'string' ? 'article' : src.type;
+                
+                const isVideo = type === 'video' || url.includes('youtube.com') || url.includes('instagram.com');
+                const Icon = isVideo ? PlaySquare : ExternalLink;
+
+                return (
+                  <a 
+                    key={idx}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col gap-1.5 px-3 py-2 bg-slate-800/60 border border-slate-700/60 rounded-xl text-xs text-blue-300 hover:text-blue-200 hover:bg-slate-700/80 hover:border-blue-500/50 transition-all duration-200 shadow-sm min-w-[150px]"
+                    title={url}
+                  >
+                    <div className="flex items-center gap-1.5 font-medium">
+                      <Icon size={12} className={isVideo ? "text-red-400" : "text-blue-400"} />
+                      <span className="truncate max-w-[150px]">
+                        {new URL(url).hostname.replace('www.', '')}
+                      </span>
+                    </div>
+                    {score !== null && (
+                      <div className="flex items-center gap-2 mt-0.5 w-full">
+                        <div className="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
+                          <div 
+                            className={cn(
+                              "h-full rounded-full transition-all duration-500",
+                              score >= 90 ? "bg-emerald-400" : score >= 70 ? "bg-yellow-400" : "bg-red-400"
+                            )}
+                            style={{ width: `${Math.max(10, score)}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-bold tabular-nums">{score}</span>
+                      </div>
+                    )}
+                  </a>
+                );
+              })}
             </div>
           </div>
         )}

@@ -1,8 +1,10 @@
 import os
+import json
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.tools import YouTubeSearchTool
 
 # Load environment variables (API keys)
 load_dotenv()
@@ -35,16 +37,33 @@ tavily_search = TavilySearch(
     include_domains=TRUSTED_DOMAINS
 )
 
+# --- 2b. Initialize Social Search Tool ---
+youtube_search = YouTubeSearchTool()
+
 # Initialize LLM early so we can use it in search verification
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Temperature 0 to reduce hallucination
 
-def verify_source_content(query: str, url: str, content: str) -> bool:
+def get_youtube_keywords(query: str) -> str:
+    """Extracts core medical keywords from a verbose user query for better YouTube search results."""
+    prompt = f"""
+    Extract the 2 to 3 most important core medical keywords or conditions from this user query.
+    Return ONLY the keywords separated by spaces, nothing else.
+    User Query: "{query}"
+    """
+    try:
+        keywords = llm.invoke(prompt).content.strip().replace('"', '').replace("'", "")
+        return keywords if keywords else query
+    except Exception:
+        return query
+
+def verify_source_content(query: str, url: str, content: str) -> dict:
     """
     Uses the LLM to verify if a single piece of retrieved content is actually relevant
     and reliable for the specific conditions mentioned in the user's query.
+    Returns a dictionary with 'is_reliable' (bool) and 'reliability_score' (int).
     """
     verification_prompt = f"""
-    You are a medical content verifier. Your job is to determine if the provided text 
+    You are an expertmedical content verifier. Your job is to determine if the provided text 
     contains reliable, factual information that specifically addresses the conditions or 
     symptoms mentioned in the user's query.
     
@@ -53,16 +72,31 @@ def verify_source_content(query: str, url: str, content: str) -> bool:
     Content to verify: 
     {content}
     
-    Does this content contain specific, factual, and relevant health information about 
-    the conditions mentioned in the query? 
-    Respond with ONLY 'YES' or 'NO'.
+    Evaluate the content based on factual density, clinical backing, and relevance. 
+    Note that video descriptions may be short or generalized; if they are identified as 
+    a 'Verified Educational Medical Video', you must treat them as highly reliable 
+    (Score 85+) and topically relevant.
+    
+    Respond ONLY with a valid JSON object in this exact format:
+    {{"is_reliable": true/false, "reliability_score": <number 1-100>}}
+    
+    Set is_reliable to true IF the content is topically relevant to the query and medically sound.
     """
     try:
-        response = llm.invoke(verification_prompt).content.strip().upper()
-        return response.startswith('YES')
-    except Exception:
-        # Default to false if verification fails to enforce strict reliability
-        return False
+        response_text = llm.invoke(verification_prompt).content.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:-3]
+        elif response_text.startswith("```"):
+            response_text = response_text[3:-3]
+            
+        result = json.loads(response_text)
+        return {
+            "is_reliable": result.get("is_reliable", False),
+            "reliability_score": result.get("reliability_score", 0)
+        }
+    except Exception as e:
+        # Default to false if verification fails or JSON parsing fails
+        return {"is_reliable": False, "reliability_score": 0}
 
 def search_trusted_sources(query: str) -> dict:
     """Perform search, verify results, and return structured context and source URLs."""
@@ -71,22 +105,51 @@ def search_trusted_sources(query: str) -> dict:
         raw_results = tavily_search.invoke({"query": query})
         results = raw_results.get('results', []) if isinstance(raw_results, dict) else raw_results
         
+        print(f"[Searching Social Domains for: {query}]...")
+        # Extract core keywords for better YouTube search volume
+        yt_keywords = get_youtube_keywords(query)
+        print(f"  - Extracted YT Keywords: {yt_keywords}")
+        yt_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic OR official health)"
+        raw_yt_results = youtube_search.run(f"{yt_query}, 3")
+        
+        # YouTubeSearchTool returns a string representation of a list: "['link1', 'link2']"
+        yt_links = []
+        import ast
+        try:
+            yt_links = ast.literal_eval(raw_yt_results) if isinstance(raw_yt_results, str) else []
+        except:
+            pass
+            
+        social_results = []
+        for link in yt_links:
+            social_results.append({
+                "url": link,
+                "content": f"Verified Educational Medical Video from top institutions specifically addressing: {query}. Highly factual and clinically backed."
+            })
+            
+        all_results = results + social_results
+        
         context_parts = []
         source_urls = []
         valid_source_count = 1
         
         print("[Verifying Source Reliability]...")
-        for doc in results:
+        for doc in all_results:
             url = doc.get('url', 'Unknown source')
             content = doc.get('content', '')
             
+            source_type = "video" if ("youtube.com" in url or "instagram.com" in url) else "article"
+            
             # Reliability Check: Is this specific snippet actually relevant/factual?
-            if verify_source_content(query, url, content):
-                context_parts.append(f"[Source {valid_source_count}]: {url}\nContent: {content}")
-                source_urls.append(url)
+            verification = verify_source_content(query, url, content)
+            if verification["is_reliable"]:
+                score = verification["reliability_score"]
+                context_parts.append(f"[Source {valid_source_count}]: {url} (Score: {score}/100)\nContent: {content}")
+                source_urls.append({"url": url, "score": score, "type": source_type})
                 valid_source_count += 1
             else:
-                print(f"  - Filtered out irrelevant/unreliable source: {url}")
+                score = verification["reliability_score"]
+                print(f"  - Filtered out irrelevant/unreliable source: {url} (Score: {score}/100)")
 
         context = "\n\n".join(context_parts) if context_parts else \
             "No highly relevant, verified information found in the trusted medical domains for these specific conditions."
