@@ -28,9 +28,13 @@ const App = () => {
     setIsLoading(true);
 
     try {
-      // In development, Vite proxys to this, or we can use the full URL if needed
-      // Assuming FastAPI runs on 8000 and Vite serves proxy or relative
-      const response = await axios.post('http://localhost:8000/api/chat', { query });
+      // Filter out the initial welcome message from the history to save tokens
+      const history = messages.filter(msg => !msg.content.includes("Hello! I am your healthcare information assistant"));
+      
+      const response = await axios.post('http://localhost:8000/api/chat', { 
+        query,
+        history
+      });
       
       const assistantMessage = {
         role: 'assistant',

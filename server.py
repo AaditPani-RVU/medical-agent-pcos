@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 import uvicorn
 import os
 
@@ -20,6 +21,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     query: str
+    history: Optional[List[Dict[str, Any]]] = []
 
 class SourceItem(BaseModel):
     url: str
@@ -32,7 +34,7 @@ class ChatResponse(BaseModel):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    result = ask_health_assistant(request.query)
+    result = ask_health_assistant(request.query, request.history)
     return ChatResponse(
         response=result.get("response", "Error generating response."),
         sources=result.get("sources", [])

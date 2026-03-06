@@ -3,7 +3,8 @@ import json
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools import YouTubeSearchTool
 
 # Load environment variables (API keys)
@@ -59,6 +60,44 @@ def get_youtube_keywords(query: str) -> str:
     try:
         keywords = llm.invoke(prompt).content.strip().replace('"', '').replace("'", "")
         return keywords if keywords else query
+    except Exception:
+        return query
+
+def contextualize_query(query: str, history: list) -> str:
+    """Uses the chat history to rewrite the user's latest query into a standalone search term if needed."""
+    if not history:
+        return query
+        
+    chat_history_str = ""
+    # Only use the last 4 messages for context to keep search focused and cheap
+    for msg in history[-4:]:
+        role = "User" if msg.get("role") == "user" else "Assistant"
+        # Truncate very long assistant replies
+        text = msg.get("content", "")
+        if len(text) > 500:
+            text = text[:500] + "..."
+        chat_history_str += f"{role}: {text}\n"
+        
+    prompt = f"""
+    Given the following chat history and a follow-up user query, 
+    rephrase the follow-up query to be a standalone search query that 
+    captures all relevant medical context from the history.
+    If the follow-up query is already standalone, just return it exactly as is.
+    Do NOT answer the query, only return the rephrased standalone query.
+    
+    Chat History:
+    {chat_history_str}
+    
+    Follow-up query: {query}
+    
+    Standalone query:"""
+    
+    try:
+        standalone_query = llm.invoke(prompt).content.strip()
+        # Clean up quotes if hallucinated
+        if standalone_query.startswith('"') and standalone_query.endswith('"'):
+            standalone_query = standalone_query[1:-1]
+        return standalone_query
     except Exception:
         return query
 
@@ -212,22 +251,42 @@ Provided Context (Verified Sources only):
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
+    MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{query}")
 ])
 
 # LLM initialized above for use in verification
 
 # --- 5. Main Interaction Function ---
-def ask_health_assistant(query: str) -> dict:
+def ask_health_assistant(query: str, history: list = None) -> dict:
     """Main function to interact with the assistant. Returns dict with response and sources."""
     try:
-        # Step 1: Search trusted sources
-        search_results = search_trusted_sources(query)
+        history = history or []
+        # Step 1: Contextualize the query against history so the search engine works properly
+        standalone_query = contextualize_query(query, history)
+        if standalone_query != query:
+            print(f"\n[Contextualized Query for Search: '{standalone_query}']")
+            
+        # Step 2: Search trusted sources using the standalone query
+        search_results = search_trusted_sources(standalone_query)
         context = search_results["context"]
         source_urls = search_results["source_urls"]
 
-        # Step 2: Format the prompt with context and query
-        formatted_prompt = prompt.format_messages(context=context, query=query)
+        # Formulate history for LangChain
+        formatted_history = []
+        if history:
+            for msg in history[-6:]: # Keep the window sane
+                if msg.get("role") == "user":
+                    formatted_history.append(HumanMessage(content=msg.get("content", "")))
+                elif msg.get("role") == "assistant":
+                    formatted_history.append(AIMessage(content=msg.get("content", "")))
+
+        # Step 3: Format the prompt with context, query, and chat_history
+        formatted_prompt = prompt.format_messages(
+            context=context, 
+            query=query, 
+            chat_history=formatted_history
+        )
 
         # Step 3: Get LLM response
         response = llm.invoke(formatted_prompt)
