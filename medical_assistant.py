@@ -1,11 +1,13 @@
 import os
 import json
+import base64
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools import YouTubeSearchTool
+from openai import OpenAI
 
 # Load environment variables (API keys)
 load_dotenv()
@@ -43,7 +45,7 @@ youtube_search = YouTubeSearchTool()
 
 SOCIAL_DOMAINS = ["youtube.com", "instagram.com"]
 shorts_tavily = TavilySearch(
-    max_results=3,
+    max_results=5,
     include_domains=SOCIAL_DOMAINS
 )
 
@@ -117,10 +119,9 @@ def verify_source_content(query: str, url: str, content: str) -> dict:
     Content to verify: 
     {content}
     
-    Evaluate the content based on factual density, clinical backing, and relevance. 
-    Note that video descriptions may be short or generalized; if they are identified as 
-    a 'Verified Educational Medical Video', you must treat them as highly reliable 
-    (Score 85+) and topically relevant.
+    Evaluate the content based on factual density, clinical backing, and relevance.
+    Note that video content (YouTube, Instagram) may have brief or incomplete descriptions;
+    evaluate them fairly based on topical relevance rather than penalizing for brevity.
     
     Respond ONLY with a valid JSON object in this exact format:
     {{"is_reliable": true/false, "reliability_score": <number 1-100>}}
@@ -169,12 +170,12 @@ def search_trusted_sources(query: str) -> dict:
         for link in yt_links:
             social_results.append({
                 "url": link,
-                "content": f"Verified Educational Medical Video from top institutions specifically addressing: {query}. Highly factual and clinically backed."
+                "content": f"YouTube video related to: {query}"
             })
             
         print(f"[Searching Short-Form Media for: {query}]...")
         # Search specifically for shorts and reels using the extracted keywords
-        shorts_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic) (shorts OR reels)"
+        shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
         raw_shorts_results = shorts_tavily.invoke({"query": shorts_query})
         shorts_results_raw = raw_shorts_results.get('results', []) if isinstance(raw_shorts_results, dict) else raw_shorts_results
         
@@ -182,7 +183,7 @@ def search_trusted_sources(query: str) -> dict:
         for doc in shorts_results_raw:
             shorts_results.append({
                 "url": doc.get("url", ""),
-                "content": f"Verified Educational Short-Form Video (Reel/Short) addressing: {query}. Highly factual, concise, and clinically backed top-tier institution short."
+                "content": doc.get("content", f"Short-form video related to: {query}")
             })
             
         all_results = results + social_results + shorts_results
@@ -219,7 +220,7 @@ def search_trusted_sources(query: str) -> dict:
         return {"context": "Search failed. Please try again later.", "source_urls": []}
 
 # --- 3. The Strict System Prompt ---
-system_prompt = """You are an assistant for a healthcare information platform.
+system_prompt = """You are an expert healthcareassistant for a healthcare information platform.
 Your role is to respond to user disease-related inquiries by providing contextually relevant health information only.
 
 You must:
@@ -305,7 +306,46 @@ def ask_health_assistant(query: str, history: list = None) -> dict:
             "sources": []
         }
 
-# --- 6. Interactive Testing Loop ---
+# --- 6. Prescription OCR Analysis ---
+def analyze_prescription(base64_image: str) -> dict:
+    """Analyze a prescription image using OpenAI Vision and extract structured information."""
+    try:
+        client = OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a medical prescription reader. Analyze the prescription image and extract:\n"
+                        "1. List of medicines with their dosages and frequency\n"
+                        "2. Any diagnosis or condition mentioned\n"
+                        "3. Doctor's instructions if visible\n\n"
+                        "Format your response clearly with sections. "
+                        "Do NOT provide medical advice or interpretations beyond what is written."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Please read and extract all information from this prescription image."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000,
+            temperature=0
+        )
+        extracted_text = response.choices[0].message.content
+        return {"success": True, "extracted_text": extracted_text}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# --- 7. Interactive Testing Loop ---
 if __name__ == "__main__":
     print("\n" + "*" * 60)
     print("Healthcare Information Assistant (Prototype)")

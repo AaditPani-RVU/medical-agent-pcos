@@ -29,7 +29,7 @@ const getVideoEmbedUrl = (url) => {
   return null;
 };
 
-const Message = ({ role, content, sources = [] }) => {
+const Message = ({ role, content, sources = [], imageUrl }) => {
   const isUser = role === 'user';
 
   // Basic styling for the markdown returned by the backend
@@ -86,6 +86,11 @@ const Message = ({ role, content, sources = [] }) => {
             ? "bg-blue-900/30 border-blue-700/40 rounded-tr-sm" 
             : "bg-slate-800/40 border-slate-700/50 rounded-tl-sm"
         )}>
+          {imageUrl && (
+            <div className="mb-3">
+              <img src={imageUrl} alt="Uploaded prescription" className="max-w-[200px] max-h-[200px] rounded-lg border border-slate-600/50 object-cover" />
+            </div>
+          )}
           <div className="text-sm md:text-base">
             {formattedContent}
           </div>
@@ -165,7 +170,39 @@ const Message = ({ role, content, sources = [] }) => {
                     const score = typeof src === 'string' ? null : src.score;
                     const embedUrl = getVideoEmbedUrl(url);
                     
-                    if (!embedUrl) return null; // Fallback if parsing fails
+                    if (!embedUrl) {
+                      // Fallback: render as a clickable link pill
+                      let hostname;
+                      try { hostname = new URL(url).hostname.replace('www.', ''); } catch { hostname = 'Video Link'; }
+                      return (
+                        <a
+                          key={idx}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex flex-col gap-1.5 px-3 py-2 bg-slate-800/60 border border-slate-700/60 rounded-xl text-xs text-red-300 hover:text-red-200 hover:bg-slate-700/80 hover:border-red-500/50 transition-all duration-200 shadow-sm min-w-[150px]"
+                        >
+                          <div className="flex items-center gap-1.5 font-medium">
+                            <ExternalLink size={12} className="text-red-400" />
+                            <span className="truncate max-w-[150px]">{hostname}</span>
+                          </div>
+                          {score !== null && (
+                            <div className="flex items-center gap-2 mt-0.5 w-full">
+                              <div className="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-500",
+                                    score >= 90 ? "bg-emerald-400" : score >= 70 ? "bg-yellow-400" : "bg-red-400"
+                                  )}
+                                  style={{ width: `${Math.max(10, score)}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-bold tabular-nums">{score}</span>
+                            </div>
+                          )}
+                        </a>
+                      );
+                    }
 
                     const isShortForm = embedUrl.includes('shorts') || embedUrl.includes('instagram.com');
 
@@ -183,7 +220,7 @@ const Message = ({ role, content, sources = [] }) => {
                             title="Embedded Educational Video"
                           ></iframe>
                         </div>
-                        
+
                         {/* Reliability Score Bar underneath player */}
                         {score !== null && (
                           <div className="p-2.5 bg-slate-800/90 flex flex-col gap-1.5">
@@ -192,7 +229,7 @@ const Message = ({ role, content, sources = [] }) => {
                               <span className="text-[10px] text-slate-300 font-bold tabular-nums">{score}/100</span>
                             </div>
                             <div className="w-full bg-slate-900 rounded-full h-1 overflow-hidden shadow-inner">
-                              <div 
+                              <div
                                 className={cn(
                                   "h-full rounded-full transition-all duration-500",
                                   score >= 90 ? "bg-emerald-400" : score >= 70 ? "bg-yellow-400" : "bg-red-400"

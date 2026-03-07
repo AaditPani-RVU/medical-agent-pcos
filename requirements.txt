@@ -2,3 +2,5 @@ langchain
 langchain-openai
 langchain-tavily
 python-dotenv
+python-multipart
+openai

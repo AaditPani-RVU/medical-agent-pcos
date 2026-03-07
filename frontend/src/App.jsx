@@ -10,6 +10,7 @@ const App = () => {
     { role: 'assistant', content: 'Hello! I am your healthcare information assistant. How can I help you and your family today?\n\n*Note: I provide reliable information from trusted medical sources but cannot diagnose or prescribe treatments.*' }
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -19,6 +20,41 @@ const App = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  const handlePrescriptionUpload = async (file) => {
+    setIsUploading(true);
+    const imageUrl = URL.createObjectURL(file);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const uploadRes = await axios.post('http://localhost:8000/api/upload_prescription', formData);
+      const extractedText = uploadRes.data.extracted_text;
+      const query = `I uploaded my prescription. Here is what was extracted:\n\n${extractedText}\n\nPlease explain the medications and any conditions mentioned.`;
+
+      const userMessage = { role: 'user', content: query, imageUrl };
+      setMessages(prev => [...prev, userMessage]);
+      setIsUploading(false);
+      setIsLoading(true);
+
+      const history = messages.filter(msg => !msg.content.includes("Hello! I am your healthcare information assistant"));
+      const response = await axios.post('http://localhost:8000/api/chat', { query, history });
+      const assistantMessage = {
+        role: 'assistant',
+        content: response.data.response,
+        sources: response.data.sources
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error("Error uploading prescription:", error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'I apologize, but I encountered an error processing the prescription image. Please try again with a clearer image.'
+      }]);
+    } finally {
+      setIsUploading(false);
+      setIsLoading(false);
+    }
+  };
 
   const handleSend = async (query) => {
     if (!query.trim()) return;
@@ -75,12 +111,12 @@ const App = () => {
       <main className="flex-1 overflow-y-auto w-full mx-auto px-2 md:px-0 py-6 scrollbar-hide relative z-10 flex flex-col">
         <AnimatePresence>
           {messages.map((msg, idx) => (
-            <Message key={idx} role={msg.role} content={msg.content} sources={msg.sources} />
+            <Message key={idx} role={msg.role} content={msg.content} sources={msg.sources} imageUrl={msg.imageUrl} />
           ))}
         </AnimatePresence>
 
-        {isLoading && (
-          <motion.div 
+        {(isLoading || isUploading) && (
+          <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex w-full gap-4 p-4 md:p-6 mb-4 rounded-2xl max-w-4xl mx-auto flex-row items-center"
@@ -88,7 +124,8 @@ const App = () => {
             <div className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-400">
               <Activity size={20} className="animate-pulse-slow" />
             </div>
-            <div className="h-10 px-5 flex items-center justify-center gap-1.5 glass-panel rounded-full relative overflow-hidden">
+            <div className="h-10 px-5 flex items-center justify-center gap-2 glass-panel rounded-full relative overflow-hidden">
+               {isUploading && <span className="text-xs text-slate-400">Analyzing prescription...</span>}
                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-1.5 h-1.5 bg-blue-400 rounded-full block" />
                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-1.5 h-1.5 bg-blue-400 rounded-full block" />
                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-1.5 h-1.5 bg-blue-400 rounded-full block" />
@@ -101,7 +138,7 @@ const App = () => {
 
       {/* Input Area */}
       <div className="flex-shrink-0 w-full relative z-20 pb-4">
-        <ChatInput onSend={handleSend} isLoading={isLoading} />
+        <ChatInput onSend={handleSend} onUpload={handlePrescriptionUpload} isLoading={isLoading} isUploading={isUploading} />
       </div>
     </div>
   );
