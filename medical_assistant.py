@@ -50,7 +50,7 @@ shorts_tavily = TavilySearch(
 )
 
 # Initialize LLM early so we can use it in search verification
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Temperature 0 to reduce hallucination
+llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0) # Temperature 0 to reduce hallucination
 
 def get_youtube_keywords(query: str) -> str:
     """Extracts core medical keywords from a verbose user query for better YouTube search results."""
@@ -144,20 +144,36 @@ def verify_source_content(query: str, url: str, content: str) -> dict:
         # Default to false if verification fails or JSON parsing fails
         return {"is_reliable": False, "reliability_score": 0}
 
+def _normalize_tavily_results(raw):
+    """Normalize Tavily results into a list of dicts with 'url' and 'content' keys."""
+    if isinstance(raw, dict):
+        items = raw.get('results', [])
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    normalized = []
+    for item in items:
+        if isinstance(item, dict):
+            normalized.append(item)
+        elif isinstance(item, str):
+            normalized.append({"url": item, "content": ""})
+    return normalized
+
 def search_trusted_sources(query: str) -> dict:
     """Perform search, verify results, and return structured context and source URLs."""
     print(f"\n[Searching Trusted Sources: {query}]...")
     try:
         raw_results = tavily_search.invoke({"query": query})
-        results = raw_results.get('results', []) if isinstance(raw_results, dict) else raw_results
-        
+        results = _normalize_tavily_results(raw_results)
+
         print(f"[Searching Social Domains for: {query}]...")
         # Extract core keywords for better YouTube search volume
         yt_keywords = get_youtube_keywords(query)
         print(f"  - Extracted YT Keywords: {yt_keywords}")
         yt_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic OR official health)"
         raw_yt_results = youtube_search.run(f"{yt_query}, 3")
-        
+
         # YouTubeSearchTool returns a string representation of a list: "['link1', 'link2']"
         yt_links = []
         import ast
@@ -165,33 +181,31 @@ def search_trusted_sources(query: str) -> dict:
             yt_links = ast.literal_eval(raw_yt_results) if isinstance(raw_yt_results, str) else []
         except:
             pass
-            
+
         social_results = []
         for link in yt_links:
             social_results.append({
                 "url": link,
                 "content": f"YouTube video related to: {query}"
             })
-            
+
         print(f"[Searching Short-Form Media for: {query}]...")
         # Search specifically for shorts and reels using the extracted keywords
         shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
         raw_shorts_results = shorts_tavily.invoke({"query": shorts_query})
-        shorts_results_raw = raw_shorts_results.get('results', []) if isinstance(raw_shorts_results, dict) else raw_shorts_results
-        
         shorts_results = []
-        for doc in shorts_results_raw:
+        for doc in _normalize_tavily_results(raw_shorts_results):
             shorts_results.append({
                 "url": doc.get("url", ""),
                 "content": doc.get("content", f"Short-form video related to: {query}")
             })
-            
+
         all_results = results + social_results + shorts_results
-        
+
         context_parts = []
         source_urls = []
         valid_source_count = 1
-        
+
         print("[Verifying Source Reliability]...")
         for doc in all_results:
             url = doc.get('url', 'Unknown source')
@@ -202,13 +216,15 @@ def search_trusted_sources(query: str) -> dict:
             
             # Reliability Check: Is this specific snippet actually relevant/factual?
             verification = verify_source_content(query, url, content)
-            if verification["is_reliable"]:
-                score = verification["reliability_score"]
+            score = verification["reliability_score"]
+            # Video sources often have minimal text content, so use a lower threshold
+            # Articles must pass the LLM's is_reliable check; videos just need score >= 30
+            is_accepted = verification["is_reliable"] or (source_type == "video" and score >= 30)
+            if is_accepted:
                 context_parts.append(f"[Source {valid_source_count}]: {url} (Score: {score}/100)\nContent: {content}")
                 source_urls.append({"url": url, "score": score, "type": source_type})
                 valid_source_count += 1
             else:
-                score = verification["reliability_score"]
                 print(f"  - Filtered out irrelevant/unreliable source: {url} (Score: {score}/100)")
 
         context = "\n\n".join(context_parts) if context_parts else \
@@ -312,7 +328,7 @@ def analyze_prescription(base64_image: str) -> dict:
     try:
         client = OpenAI()
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",

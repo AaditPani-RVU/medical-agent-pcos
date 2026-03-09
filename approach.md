@@ -8,25 +8,33 @@ This is a Proof of Concept (POC) for a healthcare information assistant that pro
 
 ### RAG Pipeline
 
-The system follows a standard RAG (Retrieval-Augmented Generation) pattern:
+The system follows an extended RAG (Retrieval-Augmented Generation) pattern:
 
 ```
-User Query
+User Query / Prescription Image
     |
     v
-[1. Tavily Search] -- restricted to whitelisted medical domains
+[0. Prescription OCR (optional)] -- gpt-4o Vision extracts meds, dosages, conditions
     |
     v
-[2. Context Assembly] -- search results formatted with source labels
+[1a. Tavily Search] -- restricted to whitelisted medical domains (articles)
+[1b. YouTube Search] -- LangChain YouTubeSearchTool for video content
+[1c. Shorts/Reels Search] -- Tavily searching youtube.com + instagram.com
     |
     v
-[3. Prompt Construction] -- system prompt + context + user query
+[2. Source Verification] -- each result scored by LLM for relevance/reliability (1-100)
     |
     v
-[4. LLM (gpt-4o-mini)] -- generates response grounded in retrieved context
+[3. Context Assembly] -- verified results formatted with source labels
     |
     v
-[5. Response + Source Citations] -- answer with inline citations + verified URLs
+[4. Prompt Construction] -- system prompt + context + user query
+    |
+    v
+[5. LLM (gpt-4.1-mini)] -- generates response grounded in retrieved context
+    |
+    v
+[6. Response + Source Citations] -- answer with inline citations, source cards, embedded videos
 ```
 
 ### Why RAG?
@@ -75,7 +83,7 @@ The system prompt explicitly instructs the LLM to:
 
 ### 2. Temperature = 0
 
-The LLM (gpt-4o-mini) is configured with `temperature=0`, which:
+The LLM (gpt-4.1-mini) is configured with `temperature=0`, which:
 - Makes responses deterministic (same input = same output)
 - Minimizes creative embellishment
 - Reduces hallucination risk
@@ -92,40 +100,38 @@ The response includes:
 
 ## Data Flow (Detailed)
 
-1. **User enters a health-related question** via the CLI
-2. **Tavily Search API** is called with:
-   - The user's query
-   - `include_domains` set to 9 trusted medical domains
-   - `max_results=5`
-3. **Tavily returns** up to 5 search results, each containing:
-   - `url`: The source page URL
-   - `content`: Extracted text content from the page
-4. **Results are formatted** into a numbered context string:
-   - `[Source 1]: https://... \n Content: ...`
-   - `[Source 2]: https://... \n Content: ...`
-5. **The prompt is assembled** with: system prompt + formatted context + user query
-6. **gpt-4o-mini processes** the prompt and generates a response that:
-   - Answers the question using only the provided context
-   - Includes inline [Source N] citations
-7. **The response is displayed** to the user, followed by a programmatic list of all verified source URLs
+1. **User enters a health-related question** via the web UI, or **uploads a prescription image**
+2. **If prescription uploaded**: OpenAI Vision (gpt-4o) extracts medications, dosages, frequency, and conditions from the image. The extracted text is auto-sent as a chat message.
+3. **Query contextualization**: If there is chat history, the query is rewritten into a standalone search query using the LLM.
+4. **Three parallel searches** are performed:
+   - **Tavily Search** (whitelisted medical domains, max 5 results)
+   - **YouTube Search** (LangChain YouTubeSearchTool, 3 results using extracted keywords)
+   - **Shorts/Reels Search** (Tavily on youtube.com + instagram.com, max 5 results)
+5. **Source verification**: Each result is individually verified by the LLM for relevance and reliability, producing a score (1-100). Articles require `is_reliable: true`; video sources use a lower threshold (score >= 30) since their text content is often minimal.
+6. **Context assembly**: Verified results are formatted with source labels and scores.
+7. **gpt-4.1-mini processes** the prompt and generates a response grounded only in the provided context, with inline [Source N] citations.
+8. **The response is displayed** in the web UI with source cards (reliability score bars), embedded YouTube/Instagram players, and fallback link pills for non-embeddable URLs.
 
 ## Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| LLM | OpenAI gpt-4o-mini | Response generation |
-| Search | Tavily Search API | Domain-restricted web search |
+| LLM (Chat) | OpenAI gpt-4.1-mini | Response generation, verification, keyword extraction |
+| LLM (Vision) | OpenAI gpt-4o | Prescription OCR |
+| Article Search | Tavily Search API | Domain-restricted medical web search |
+| Video Search | LangChain YouTubeSearchTool | YouTube video discovery |
+| Shorts/Reels Search | Tavily Search API | YouTube Shorts + Instagram Reels |
+| Backend | FastAPI + Uvicorn | REST API server |
+| Frontend | React + Vite + Tailwind v4 | Chat UI with embedded media |
 | Framework | LangChain | Prompt management, LLM integration |
 | Config | python-dotenv | API key management |
 
 ## Limitations (POC Scope)
 
-- **No conversation memory**: Each query is independent; the assistant does not remember previous questions
-- **No persistent storage**: Search results and responses are not saved
-- **CLI only**: No web interface; interaction is via command line
+- **No persistent storage**: Search results and responses are not saved across sessions
 - **No authentication**: API keys are stored in .env file
 - **English only**: No multi-language support
-- **5 result limit**: Tavily returns max 5 results per query
+- **Prescription OCR**: Accuracy depends on handwriting legibility
 
 ## Setup
 
@@ -135,4 +141,5 @@ The response includes:
    TAVILY_API_KEY=your-tavily-api-key
    ```
 2. Install dependencies: `pip install -r requirements.txt`
-3. Run: `python medical_assistant.py`
+3. Build frontend: `cd frontend && npm install && npm run build`
+4. Run: `python server.py`

@@ -11,6 +11,9 @@ This prototype focuses on **source verification** and **strict guardrails**, add
 - **Zero Temperature**: Responses operate with `temperature=0` to ensure determinism and minimize creative embellishment or hallucinations.
 - **Contextual Grounding**: The LLM is forced to answer _only_ using retrieved context. It is designed to decline answers if verified information is unavailable.
 - **Transparent Citations**: Responses include inline `[Source N]` citations, paired with a programmatic list of exact source URLs.
+- **Video Sources**: YouTube videos, Shorts, and Instagram Reels are searched and embedded alongside article sources, with reliability scoring.
+- **Prescription OCR**: Upload a prescription image and the system extracts medications, dosages, and conditions using OpenAI Vision (gpt-4o), then runs the full RAG pipeline on the extracted information.
+- **Web UI**: React + Vite + Tailwind frontend with chat interface, source cards, embedded video players, and prescription upload.
 
 ## Whitelisted Domains
 
@@ -28,11 +31,13 @@ Currently, the search engine is strictly limited to:
 
 ## Architecture
 
-1. **User Query**: User inputs a health query via the CLI.
-2. **Search (Tavily)**: Interrogates only the whitelisted domains and retrieves top 5 verified documents.
-3. **Prompt Assembly**: Combines the strict system prompt, retrieved documents (as context), and the user's query.
-4. **Generation (OpenAI gpt-4o-mini)**: Generates an answer strictly grounded in the provided context, along with citations.
-5. **Output**: Displays the assistant's response accompanied by clickable URLs verifying the source.
+1. **User Query**: User inputs a health query via the web UI (or uploads a prescription image).
+2. **Prescription OCR** (optional): If an image is uploaded, OpenAI Vision (gpt-4o) extracts medications, dosages, and conditions.
+3. **Search (Tavily + YouTube)**: Searches whitelisted medical domains (articles), YouTube (videos), and YouTube/Instagram (shorts/reels).
+4. **Source Verification**: Each result is verified for relevance and reliability by a separate LLM call with a reliability score (1-100).
+5. **Prompt Assembly**: Combines the strict system prompt, verified documents (as context), and the user's query.
+6. **Generation (OpenAI gpt-4.1-mini)**: Generates an answer strictly grounded in the provided context, along with citations.
+7. **Output**: Displays the response with inline citations, source cards with reliability scores, and embedded video players.
 
 ## Setup Instructions
 
@@ -65,24 +70,34 @@ Currently, the search engine is strictly limited to:
 
 ### Running the Application
 
-Execute the Python script to start the interactive CLI assistant:
+**Backend:**
+```bash
+python server.py
+```
 
+**Frontend (dev mode):**
+```bash
+cd frontend && npm install && npm run dev
+```
+
+**Production:** Build the frontend first (`cd frontend && npm run build`), then `python server.py` serves both the API and static files at `http://localhost:8000`.
+
+**CLI only (no web server):**
 ```bash
 python medical_assistant.py
 ```
 
-Type your health-related questions. Type `exit` or `quit` to stop the assistant.
-
 ## Tech Stack
 
-- **LLM**: OpenAI `gpt-4o-mini`
-- **Search Provider**: Tavily Search API
+- **LLM**: OpenAI `gpt-4.1-mini` (chat & verification), `gpt-4o` (prescription OCR)
+- **Search**: Tavily Search API (articles + shorts/reels), LangChain YouTubeSearchTool
+- **Backend**: FastAPI + Uvicorn
+- **Frontend**: React + Vite + Tailwind CSS v4 + Framer Motion
 - **Framework**: LangChain
 - **Configuration**: Python `dotenv`
 
 ## Limitations (POC Scope)
 
-- **No Memory**: Each interaction is stateless; the assistant does not recall previous questions.
-- **CLI Only**: Does not yet have a web or graphical user interface.
-- **No Persistence**: Chat logs and retrieved documents are not saved.
+- **No Persistence**: Chat logs and retrieved documents are not saved across sessions.
 - **English Focus**: Multi-language support is not currently implemented.
+- **Prescription OCR**: Accuracy depends on handwriting legibility; best with printed or clearly written prescriptions.
