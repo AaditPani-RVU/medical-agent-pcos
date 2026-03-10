@@ -1,6 +1,14 @@
 langchain
 langchain-openai
 langchain-tavily
+langchain-ollama
 python-dotenv
 python-multipart
-openai
+trafilatura
+beautifulsoup4
+yt-dlp
+youtube-transcript-api
+sqlalchemy
+psycopg2-binary
+biopython
+praw

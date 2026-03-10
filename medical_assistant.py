@@ -22,24 +22,51 @@ if not os.getenv("TAVILY_API_KEY"):
 
 # --- 1. Define Trusted Sources ---
 # This is the "Whitelist" that ensures we only search verified domains
-TRUSTED_DOMAINS = [
-    "mayoclinic.org",
-    "clevelandclinic.org",
-    "hopkinsmedicine.org",
+ALLOWED_DOMAINS = [
+    "who.int",
     "cdc.gov",
     "nih.gov",
-    "healthychildren.org", # Pediatric/Family focus
-    "kidshealth.org",      # Pediatric/Family focus
     "nhs.uk",
-    "who.int"
+    "mayoclinic.org",
+    "clevelandclinic.org",
+    "endocrine.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "ncbi.nlm.nih.gov",
+    "monash.edu",
+    "eshre.eu"
 ]
+
+HIGH_CONFIDENCE_DOMAINS = [
+    "who.int", "cdc.gov", "nih.gov", "nhs.uk", 
+    "mayoclinic.org", "clevelandclinic.org", "endocrine.org", "eshre.eu"
+]
+
+MEDIUM_CONFIDENCE_DOMAINS = [
+    "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "monash.edu"
+]
+
+def get_domain_from_url(url: str) -> str:
+    """Extracts the base domain from a URL for strict allowlist matching."""
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+def get_confidence_score(url: str) -> tuple:
+    """Returns (label, base_score) for a domain."""
+    domain = get_domain_from_url(url)
+    if any(domain == d or domain.endswith("." + d) for d in HIGH_CONFIDENCE_DOMAINS):
+        return "HIGH", 90
+    if any(domain == d or domain.endswith("." + d) for d in MEDIUM_CONFIDENCE_DOMAINS):
+        return "MEDIUM", 70
+    return "LOW", 0
 
 # --- 2. Initialize Search Tool ---
 # We configure Tavily to specifically search ONLY the included domains.
 # We fetch max 5 results to give the LLM enough context without overwhelming it.
 tavily_search = TavilySearch(
-    max_results=5,
-    include_domains=TRUSTED_DOMAINS
+    max_results=20
 )
 
 # --- 2b. Initialize Social Search Tools ---
@@ -47,12 +74,90 @@ youtube_search = YouTubeSearchTool()
 
 SOCIAL_DOMAINS = ["youtube.com", "instagram.com"]
 shorts_tavily = TavilySearch(
-    max_results=5,
-    include_domains=SOCIAL_DOMAINS
+    max_results=5
 )
 
-# Initialize LLM early so we can use it in search verification
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0) # Temperature 0 to reduce hallucination
+# --- Model Fallback Layer ---
+_active_model = "none"
+
+class FallbackLLM:
+    """Wrapper that tries OpenAI first, falls back to local Mistral on any failure."""
+
+    def __init__(self):
+        global _active_model
+        self._openai = None
+        self._mistral = None
+
+        # Initialize OpenAI (gpt-4o-mini for speed/cost similar to flash)
+        if os.getenv("OPENAI_API_KEY"):
+            try:
+                self._openai = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+                print("[Model] OpenAI GPT-4o-mini available")
+            except Exception as e:
+                print(f"[Model] OpenAI init failed: {e}")
+
+        # Initialize local Mistral
+        try:
+            from langchain_ollama import ChatOllama
+            self._mistral = ChatOllama(model="mistral:7b-instruct-q4_K_M", temperature=0)
+            print("[Model] Local Mistral 7B Q4 available")
+        except Exception as e:
+            print(f"[Model] Mistral init failed: {e}")
+
+        if self._openai:
+            _active_model = "gpt-4o-mini"
+        elif self._mistral:
+            _active_model = "mistral-local"
+        else:
+            _active_model = "none"
+
+    def invoke(self, prompt, **kwargs):
+        global _active_model
+        # Try OpenAI first
+        if self._openai:
+            try:
+                result = self._openai.invoke(prompt, **kwargs)
+                _active_model = "gpt-4o-mini"
+                return result
+            except Exception as e:
+                print(f"[Model] OpenAI call failed ({type(e).__name__}), falling back to Mistral...")
+
+        # Fallback to local Mistral
+        if self._mistral:
+            try:
+                result = self._mistral.invoke(prompt, **kwargs)
+                _active_model = "mistral-local"
+                return result
+            except Exception as e:
+                print(f"[Model] Mistral call also failed: {e}")
+                raise
+
+        raise RuntimeError("No LLM available. Check OpenAI API key or Ollama installation.")
+
+    async def ainvoke(self, prompt, **kwargs):
+        global _active_model
+        # Try OpenAI first
+        if self._openai:
+            try:
+                result = await self._openai.ainvoke(prompt, **kwargs)
+                _active_model = "gpt-4o-mini"
+                return result
+            except Exception as e:
+                print(f"[Model] OpenAI async call failed ({type(e).__name__}), falling back to Mistral...")
+
+        # Fallback to local Mistral
+        if self._mistral:
+            try:
+                result = await self._mistral.ainvoke(prompt, **kwargs)
+                _active_model = "mistral-local"
+                return result
+            except Exception as e:
+                print(f"[Model] Mistral async call also failed: {e}")
+                raise
+
+        raise RuntimeError("No LLM available. Check OpenAI API key or Ollama installation.")
+
+llm = FallbackLLM()
 
 async def get_youtube_keywords(query: str) -> str:
     """Extracts core medical keywords from a verbose user query for better YouTube search results."""
@@ -129,6 +234,7 @@ async def verify_source_content(query: str, url: str, content: str) -> dict:
     {{"is_reliable": true/false, "reliability_score": <number 1-100>}}
 
     Set is_reliable to true IF the content is topically relevant to the query and medically sound.
+    You must be lenient towards video/social media transcripts as they lack deep clinical backing.
     """
     try:
         response_text = (await llm.ainvoke(verification_prompt)).content.strip()
@@ -162,104 +268,256 @@ def _normalize_tavily_results(raw):
             normalized.append({"url": item, "content": ""})
     return normalized
 
-async def search_trusted_sources(query: str) -> dict:
-    """Perform search, verify results, and return structured context and source URLs."""
-    print(f"\n[Searching Trusted Sources: {query}]...")
-    try:
-        # Step 1: Run Tavily medical search + keyword extraction in parallel
-        raw_results_task = tavily_search.ainvoke({"query": query})
-        yt_keywords_task = get_youtube_keywords(query)
-        raw_results, yt_keywords = await asyncio.gather(raw_results_task, yt_keywords_task)
+MAX_SOURCES = 5
+MIN_SOURCES = 2
 
-        results = _normalize_tavily_results(raw_results)
+def _get_source_label(domain: str) -> str:
+    """Return a human-friendly label for a domain."""
+    labels = {
+        "who.int": "World Health Organization",
+        "cdc.gov": "Centers for Disease Control",
+        "nih.gov": "National Institutes of Health",
+        "nhs.uk": "NHS (UK)",
+        "mayoclinic.org": "Mayo Clinic",
+        "clevelandclinic.org": "Cleveland Clinic",
+        "endocrine.org": "Endocrine Society",
+        "eshre.eu": "ESHRE",
+        "icmr.gov.in": "ICMR India",
+        "pubmed.ncbi.nlm.nih.gov": "PubMed Central",
+        "ncbi.nlm.nih.gov": "NCBI / PubMed",
+        "monash.edu": "Monash University",
+        "youtube.com": "YouTube",
+        "youtu.be": "YouTube",
+    }
+    for key, label in labels.items():
+        if domain == key or domain.endswith("." + key):
+            return label
+    return domain.title()
 
-        # Step 2: Run YouTube search + Shorts/Reels search in parallel (both need keywords)
-        print(f"[Searching Social Domains for: {query}]...")
-        print(f"  - Extracted YT Keywords: {yt_keywords}")
-        yt_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic OR official health)"
-        shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
 
-        yt_search_task = youtube_search.arun(f"{yt_query}, 3")
-        shorts_search_task = shorts_tavily.ainvoke({"query": shorts_query})
-        raw_yt_results, raw_shorts_results = await asyncio.gather(yt_search_task, shorts_search_task)
-        print(f"[Searching Short-Form Media for: {query}]...")
+def _select_diverse_sources(validated: list, max_total: int = MAX_SOURCES) -> list:
+    """
+    Select up to max_total sources. Prefers diversity but does NOT require it.
 
-        # Parse YouTube results
-        yt_links = []
-        try:
-            yt_links = ast.literal_eval(raw_yt_results) if isinstance(raw_yt_results, str) else []
-        except:
-            pass
+    Strategy:
+    1. Sort all sources by confidence_score descending.
+    2. Try to pick one source per unique domain first.
+    3. Fill remaining slots from the best remaining sources (may repeat domains).
+    4. Try to include 1 VIDEO if available, but do NOT require it.
+    5. Even 1 source is valid — no minimum requirement.
+    """
+    all_sources = list(validated)
+    all_sources.sort(key=lambda x: x.get("confidence_score", 0), reverse=True)
 
-        social_results = [{"url": link, "content": f"YouTube video related to: {query}"} for link in yt_links]
-        shorts_results = [
-            {"url": doc.get("url", ""), "content": doc.get("content", f"Short-form video related to: {query}")}
-            for doc in _normalize_tavily_results(raw_shorts_results)
-        ]
+    if not all_sources:
+        return []
 
-        all_results = results + social_results + shorts_results
+    selected = []
+    seen_domains = set()
 
-        # Step 3: Verify ALL sources in parallel
-        print("[Verifying Source Reliability]...")
-        verification_tasks = [
-            verify_source_content(query, doc.get('url', 'Unknown source'), doc.get('content', ''))
-            for doc in all_results
-        ]
-        verifications = await asyncio.gather(*verification_tasks)
+    # First pass: pick best source from each unique domain (diversity preference)
+    for s in all_sources:
+        if len(selected) >= max_total:
+            break
+        domain = s.get("source_domain", "")
+        if domain not in seen_domains:
+            seen_domains.add(domain)
+            selected.append(s)
 
-        context_parts = []
-        source_urls = []
-        valid_source_count = 1
+    # Second pass: fill remaining slots from best remaining sources
+    for s in all_sources:
+        if len(selected) >= max_total:
+            break
+        if s not in selected:
+            selected.append(s)
 
-        for doc, verification in zip(all_results, verifications):
-            url = doc.get('url', 'Unknown source')
-            content = doc.get('content', '')
-            source_type = "video" if ("youtube.com" in url or "instagram.com" in url) else "article"
-            score = verification["reliability_score"]
-            is_accepted = verification["is_reliable"] or (source_type == "video" and score >= 30)
-            if is_accepted:
-                context_parts.append(f"[Source {valid_source_count}]: {url} (Score: {score}/100)\nContent: {content}")
-                source_urls.append({"url": url, "score": score, "type": source_type})
-                valid_source_count += 1
+    # Try to include 1 video if available and not already included
+    has_video = any(s.get("content_type") == "VIDEO" for s in selected)
+    if not has_video:
+        videos = [s for s in all_sources if s.get("content_type") == "VIDEO" and s not in selected]
+        if videos:
+            # Replace the lowest-scored article with the best video
+            if len(selected) >= max_total:
+                selected[-1] = videos[0]
             else:
-                print(f"  - Filtered out irrelevant/unreliable source: {url} (Score: {score}/100)")
+                selected.append(videos[0])
 
-        context = "\n\n".join(context_parts) if context_parts else \
-            "No highly relevant, verified information found in the trusted medical domains for these specific conditions."
+    print(f"  Diversity: {len(set(s.get('source_domain','') for s in selected))} unique domains, "
+          f"{sum(1 for s in selected if s.get('content_type')=='VIDEO')} videos")
+    return selected
 
-        return {"context": context, "source_urls": source_urls}
+
+def search_trusted_sources(query: str) -> dict:
+    """
+    Three-layer verified medical retrieval pipeline.
+
+    Priority:
+    1. Local knowledge base (fastest, pre-scraped trusted content)
+    2. Tavily web search fallback (if local KB insufficient)
+    3. Auto-cache Tavily results into local KB for future queries
+
+    All layers enforce deterministic domain filtering and confidence scoring.
+    """
+    import sys
+    import os
+    pocs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pocs", "womens_health_pcos")
+    if pocs_path not in sys.path:
+        sys.path.insert(0, pocs_path)
+
+    try:
+        from retrieval.domain_filter import filter_by_domain
+        from retrieval.content_classifier import classify_results
+        from retrieval.confidence_scoring import score_results
+        from retrieval.constraints_validator import validate_batch
+        from storage.local_kb import search as kb_search, store_batch
+
+        print(f"\n[Pipeline] Query: {query}")
+        print(f"[Pipeline] Model: {_active_model}")
+
+        # === Layer 1: Local Knowledge Base ===
+        print("[Layer 1: Local KB]")
+        local_results = kb_search(query, limit=10)
+        print(f"  Found {len(local_results)} local sources.")
+
+        if len(local_results) >= 2:
+            # Enough local sources — skip Tavily entirely
+            print(f"  ✓ Using local KB (skipping Tavily)")
+            diverse = _select_diverse_sources(local_results)
+            return _build_response(diverse, query, source_layer="local_kb")
+
+        # === Layer 2: Tavily Fallback ===
+        print("[Layer 2: Tavily Fallback]")
+        try:
+            from retrieval.tavily_search import MedicalSearchEngine
+            engine = MedicalSearchEngine(max_results=20)
+            raw_results = engine.search(query)
+            print(f"  Tavily returned {len(raw_results)} raw results.")
+        except Exception as e:
+            print(f"  Tavily failed: {e}")
+            raw_results = []
+
+        if not raw_results and not local_results:
+            return {"context": "No verified medical sources found for this query.", "source_urls": []}
+
+        # Filter Tavily results through the deterministic pipeline
+        tavily_validated = []
+        if raw_results:
+            filtered, _ = filter_by_domain(raw_results)
+            print(f"  {len(filtered)} passed domain filter.")
+
+            if filtered:
+                classified = classify_results(filtered)
+                scored = score_results(classified)
+                tavily_validated, _ = validate_batch(scored)
+                print(f"  {len(tavily_validated)} passed constraints.")
+
+                # Auto-cache into local KB for future queries
+                if tavily_validated:
+                    cache_records = []
+                    for r in tavily_validated:
+                        cache_records.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("url", ""),
+                            "source_domain": r.get("source_domain", ""),
+                            "content_type": r.get("content_type", "ARTICLE"),
+                            "content": r.get("content", ""),
+                            "confidence_level": r.get("confidence_level", "MEDIUM"),
+                            "confidence_score": r.get("confidence_score", 70),
+                            "query_topics": query,
+                            "source_label": _get_source_label(r.get("source_domain", "")),
+                        })
+                    cached = store_batch(cache_records)
+                    print(f"  Cached {cached} new sources to local KB.")
+
+        # Combine local + Tavily results (dedup by URL)
+        all_results = list(local_results)
+        seen_urls = {r.get("url", "") for r in all_results}
+        for r in tavily_validated:
+            if r.get("url", "") not in seen_urls:
+                all_results.append(r)
+                seen_urls.add(r.get("url", ""))
+
+        if not all_results:
+            return {"context": "No verified medical sources found for this query.", "source_urls": []}
+
+        # Diversity selection
+        diverse = _select_diverse_sources(all_results)
+        layer = "local_kb+tavily" if local_results and tavily_validated else "tavily"
+        return _build_response(diverse, query, source_layer=layer)
+
     except Exception as e:
-        print(f"Error during search/verification: {e}")
+        print(f"Error during pipeline: {e}")
+        import traceback
+        traceback.print_exc()
         return {"context": "Search failed. Please try again later.", "source_urls": []}
 
+
+def _build_response(sources: list, query: str, source_layer: str = "unknown") -> dict:
+    """Build the final context and source_urls from a list of validated sources."""
+    context_parts = []
+    source_urls = []
+
+    print(f"[Building Response] {len(sources)} sources from {source_layer}")
+    for doc in sources:
+        url = doc.get("url", "")
+        content = doc.get("content", "")
+        title = doc.get("title", "") or url.split("/")[-1].replace("-", " ").title()
+        content_type = doc.get("content_type", "ARTICLE")
+        domain = doc.get("source_domain", get_domain_from_url(url))
+        source_label = doc.get("source_label", "") or _get_source_label(domain)
+        confidence = doc.get("confidence_score", 50)
+        conf_level = doc.get("confidence_level", "MEDIUM")
+
+        type_tag = "VIDEO" if content_type == "VIDEO" else "ARTICLE"
+        context_parts.append(
+            f"[Source {len(source_urls)+1}] ({type_tag}) {title}\n"
+            f"Source: {source_label} | Confidence: {confidence}\n"
+            f"URL: {url}\n"
+            f"Content: {content}"
+        )
+        source_urls.append({
+            "url": url,
+            "score": confidence,
+            "type": content_type.lower(),
+            "title": title,
+            "source_label": source_label,
+            "confidence_level": conf_level,
+        })
+
+    if not context_parts:
+        return {"context": "No verified medical sources found for this query.", "source_urls": []}
+
+    context = "\n\n".join(context_parts)
+    print(f"  → Returning {len(source_urls)} sources | Layer: {source_layer} | Model: {_active_model}")
+    return {"context": context, "source_urls": source_urls}
+
 # --- 3. The Strict System Prompt ---
-system_prompt = """You are an expert healthcareassistant for a healthcare information platform.
-Your role is to respond to user disease-related inquiries by providing contextually relevant health information only.
+system_prompt = """You are a trusted healthcare information assistant called Dory.
+Your role is to provide clear, educational health information grounded only in verified medical sources.
 
-You must:
-- Extract all specific conditions or symptoms mentioned in the user's query.
-- Present verified health content explicitly structured **condition by condition** (e.g., using headers for each condition like "### Hypertension" and "### Diabetes").
-- Ensure all information is informational and educational, not diagnostic or prescriptive.
-- Prioritize source credibility, using ONLY the context provided below which comes from verified doctors, medical professionals, and trusted health influencers/institutions.
-- Maintain strict contextual relevance to the user's query.
-- Cite your sources inline using the [Source N] labels provided in the context (e.g., "According to [Source 1], ..."). This helps users verify the information.
+Response Guidelines:
+- Write in clear, accessible language that a general audience can understand.
+- Structure your response with short paragraphs and headers when covering multiple topics.
+- Summarize research findings in simple terms, avoiding unnecessary jargon.
+- Always cite your sources inline using the [Source N] labels (e.g., "According to [Source 1], ...").
+- When citing a video source, mention it is a video (e.g., "As explained in the video [Source 3], ...").
 
-The platform is family-oriented:
-- Family refers to family sharing and shared family health needs.
-- Use family context only to improve content relevance, not medical interpretation.
+Source Rules:
+- Use ONLY the verified sources provided in the context below.
+- Each source has a type (ARTICLE or VIDEO), a confidence score, and a publication source.
+- Prioritize higher confidence sources when information conflicts.
+- If the context does not contain sufficient information, explicitly state: "I don't have enough verified information on this specific topic. Please consult a healthcare provider."
 
-Content may include: Medical reports, observed patterns, educational health material, and practical health tips.
+You must NEVER:
+- Diagnose medical conditions
+- Recommend specific medications or treatments
+- Claim medical certainty
+- Hallucinate facts or fabricate sources
+- Use information not present in the provided context
 
-You must not:
-- Provide medical diagnoses or treatment recommendations.
-- Make predictions or assumptions.
-- Add features, ideas, or information beyond what is explicitly requested.
-- Hallucinate sources or facts.
-- Fabricate or alter any source URLs.
+All information is educational only. Always recommend consulting a healthcare professional for personal medical decisions.
 
-If the answer to the user's inquiry is not contained within the Provided Context, you must state that you do not have enough verified information to answer, and recommend they speak with a healthcare provider.
-
-Provided Context (Verified Sources only):
+Provided Context (Verified Sources):
 {context}
 """
 
@@ -282,7 +540,7 @@ async def ask_health_assistant(query: str, history: list = None) -> dict:
             print(f"\n[Contextualized Query for Search: '{standalone_query}']")
 
         # Step 2: Search trusted sources using the standalone query
-        search_results = await search_trusted_sources(standalone_query)
+        search_results = search_trusted_sources(standalone_query)
         context = search_results["context"]
         source_urls = search_results["source_urls"]
 
@@ -346,7 +604,7 @@ async def analyze_prescription(base64_images: list[str]) -> dict:
         max_tokens = min(1000 * image_count, 4000)
 
         response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -369,13 +627,24 @@ async def analyze_prescription(base64_images: list[str]) -> dict:
             max_tokens=max_tokens,
             temperature=0
         )
+        
         extracted_text = response.choices[0].message.content
         return {"success": True, "extracted_text": extracted_text}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+# --- 7. PCOS Pattern Evaluation ---
+def evaluate_pcos(user_data: dict) -> dict:
+    """
+    Evaluates a user questionnaire profile (age, weight, cycles, symptoms), 
+    determines patterns, provides risk awareness scores, 
+    and fetches structured educational content mapped to those patterns.
+    """
+    from pocs.womens_health_pcos.assessment.content_mapper import evaluate_pcos_patterns
+    return evaluate_pcos_patterns(user_data)
 
-# --- 7. Interactive Testing Loop ---
+
+# --- 8. Interactive Testing Loop ---
 if __name__ == "__main__":
     async def main():
         print("\n" + "*" * 60)

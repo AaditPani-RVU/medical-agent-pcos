@@ -56,7 +56,7 @@ For production: build frontend first (`npm run build`), then `python server.py` 
   2. **YouTube Search** — uses LangChain `YouTubeSearchTool` + keyword extraction via LLM
   3. **Shorts/Reels Search** — second Tavily instance searching `youtube.com` + `instagram.com`
   4. **Source Verification** — each retrieved result is verified for relevance/reliability by a separate LLM call (returns reliability score 1-100)
-  5. **Response Generation** — `gpt-4o-mini` at temperature=0 with strict system prompt, inline `[Source N]` citations
+  5. **Response Generation** — `gemini-2.5-flash` at temperature=0 with strict system prompt, inline `[Source N]` citations
 
 Key objects: `tavily_search`, `shorts_tavily`, `youtube_search`, `llm` (all module-level singletons).
 
@@ -79,7 +79,7 @@ Response: { "response": string, "sources": [{ "url": string, "score": int, "type
 ## Environment Variables
 
 Required in `.env` at project root:
-- `OPENAI_API_KEY` — OpenAI API key (used for gpt-4o-mini)
+- `GEMINI_API_KEY` — Google Gemini API key (used for gemini-1.5-flash)
 - `TAVILY_API_KEY` — Tavily Search API key
 
 ## Key Constraints

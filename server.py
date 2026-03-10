@@ -28,6 +28,9 @@ class SourceItem(BaseModel):
     url: str
     score: int
     type: str
+    title: Optional[str] = ""
+    source_label: Optional[str] = ""
+    confidence_level: Optional[str] = ""
 
 class ChatResponse(BaseModel):
     response: str

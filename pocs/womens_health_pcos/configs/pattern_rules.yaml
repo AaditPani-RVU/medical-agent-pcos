@@ -1,0 +1,4 @@
+# Pattern matching rules for symptoms
+patterns:
+  irregular_periods: ["irregular", "missed", "delayed"]
+  hirsutism: ["excessive hair", "facial hair"]

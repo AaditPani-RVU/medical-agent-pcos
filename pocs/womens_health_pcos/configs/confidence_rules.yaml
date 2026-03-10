@@ -1,0 +1,5 @@
+# Confidence scoring rules
+rules:
+  peer_reviewed: 0.9
+  clinical_guideline: 1.0
+  community_anecdote: 0.3
