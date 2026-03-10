@@ -134,6 +134,29 @@ class FallbackLLM:
 
         raise RuntimeError("No LLM available. Check OpenAI API key or Ollama installation.")
 
+    async def ainvoke(self, prompt, **kwargs):
+        global _active_model
+        # Try OpenAI first
+        if self._openai:
+            try:
+                result = await self._openai.ainvoke(prompt, **kwargs)
+                _active_model = "gpt-4o-mini"
+                return result
+            except Exception as e:
+                print(f"[Model] OpenAI async call failed ({type(e).__name__}), falling back to Mistral...")
+
+        # Fallback to local Mistral
+        if self._mistral:
+            try:
+                result = await self._mistral.ainvoke(prompt, **kwargs)
+                _active_model = "mistral-local"
+                return result
+            except Exception as e:
+                print(f"[Model] Mistral async call also failed: {e}")
+                raise
+
+        raise RuntimeError("No LLM available. Check OpenAI API key or Ollama installation.")
+
 llm = FallbackLLM()
 
 async def get_youtube_keywords(query: str) -> str:
@@ -517,7 +540,7 @@ async def ask_health_assistant(query: str, history: list = None) -> dict:
             print(f"\n[Contextualized Query for Search: '{standalone_query}']")
 
         # Step 2: Search trusted sources using the standalone query
-        search_results = await search_trusted_sources(standalone_query)
+        search_results = search_trusted_sources(standalone_query)
         context = search_results["context"]
         source_urls = search_results["source_urls"]
 
@@ -581,7 +604,7 @@ async def analyze_prescription(base64_images: list[str]) -> dict:
         max_tokens = min(1000 * image_count, 4000)
 
         response = await client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -605,18 +628,7 @@ async def analyze_prescription(base64_images: list[str]) -> dict:
             temperature=0
         )
         
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": f"{system_instructions}\n\nPlease read and extract all information from this prescription image."},
-                {
-                    "type": "image_url",
-                    "image_url": f"data:image/jpeg;base64,{base64_image}"
-                }
-            ]
-        )
-        
-        response = vision_llm.invoke([message])
-        extracted_text = response.content
+        extracted_text = response.choices[0].message.content
         return {"success": True, "extracted_text": extracted_text}
     except Exception as e:
         return {"success": False, "error": str(e)}
