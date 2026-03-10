@@ -12,7 +12,7 @@ This prototype focuses on **source verification** and **strict guardrails**, add
 - **Contextual Grounding**: The LLM is forced to answer _only_ using retrieved context. It is designed to decline answers if verified information is unavailable.
 - **Transparent Citations**: Responses include inline `[Source N]` citations, paired with a programmatic list of exact source URLs.
 - **Video Sources**: YouTube videos, Shorts, and Instagram Reels are searched and embedded alongside article sources, with reliability scoring.
-- **Prescription OCR**: Upload a prescription image and the system extracts medications, dosages, and conditions using OpenAI Vision (gpt-4o), then runs the full RAG pipeline on the extracted information.
+- **Prescription OCR**: Upload a prescription image and the system extracts medications, dosages, and conditions using Google Gemini Vision, then runs the full RAG pipeline on the extracted information.
 - **Web UI**: React + Vite + Tailwind frontend with chat interface, source cards, embedded video players, and prescription upload.
 
 ## Whitelisted Domains
@@ -32,11 +32,11 @@ Currently, the search engine is strictly limited to:
 ## Architecture
 
 1. **User Query**: User inputs a health query via the web UI (or uploads a prescription image).
-2. **Prescription OCR** (optional): If an image is uploaded, OpenAI Vision (gpt-4o) extracts medications, dosages, and conditions.
+2. **Prescription OCR** (optional): If an image is uploaded, Google Gemini Vision extracts medications, dosages, and conditions.
 3. **Search (Tavily + YouTube)**: Searches whitelisted medical domains (articles), YouTube (videos), and YouTube/Instagram (shorts/reels).
 4. **Source Verification**: Each result is verified for relevance and reliability by a separate LLM call with a reliability score (1-100).
 5. **Prompt Assembly**: Combines the strict system prompt, verified documents (as context), and the user's query.
-6. **Generation (OpenAI gpt-4.1-mini)**: Generates an answer strictly grounded in the provided context, along with citations.
+6. **Generation (Google Gemini gemini-2.5-flash)**: Generates an answer strictly grounded in the provided context, along with citations.
 7. **Output**: Displays the response with inline citations, source cards with reliability scores, and embedded video players.
 
 ## Setup Instructions
@@ -44,7 +44,7 @@ Currently, the search engine is strictly limited to:
 ### Prerequisites
 
 - Python 3.8+
-- An OpenAI API Key
+- A Google Gemini API Key
 - A Tavily API Key
 
 ### Installation
@@ -59,7 +59,7 @@ Currently, the search engine is strictly limited to:
    Create a `.env` file in the root directory and add your API keys:
 
    ```env
-   OPENAI_API_KEY=your_openai_api_key_here
+   GEMINI_API_KEY=your_gemini_api_key_here
    TAVILY_API_KEY=your_tavily_api_key_here
    ```
 
@@ -89,7 +89,7 @@ python medical_assistant.py
 
 ## Tech Stack
 
-- **LLM**: OpenAI `gpt-4.1-mini` (chat & verification), `gpt-4o` (prescription OCR)
+- **LLM**: Google `gemini-2.5-flash` (chat, verification, and prescription OCR)
 - **Search**: Tavily Search API (articles + shorts/reels), LangChain YouTubeSearchTool
 - **Backend**: FastAPI + Uvicorn
 - **Frontend**: React + Vite + Tailwind CSS v4 + Framer Motion

@@ -1,0 +1,8 @@
+# Sources configuration
+sources:
+  pubmed:
+    enabled: true
+    priority: 1
+  cdc:
+    enabled: true
+    priority: 2

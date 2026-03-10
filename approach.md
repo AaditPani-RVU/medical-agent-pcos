@@ -14,7 +14,7 @@ The system follows an extended RAG (Retrieval-Augmented Generation) pattern:
 User Query / Prescription Image
     |
     v
-[0. Prescription OCR (optional)] -- gpt-4o Vision extracts meds, dosages, conditions
+[0. Prescription OCR (optional)] -- gemini-2.5-flash extracts meds, dosages, conditions
     |
     v
 [1a. Tavily Search] -- restricted to whitelisted medical domains (articles)
@@ -31,7 +31,7 @@ User Query / Prescription Image
 [4. Prompt Construction] -- system prompt + context + user query
     |
     v
-[5. LLM (gpt-4.1-mini)] -- generates response grounded in retrieved context
+[5. LLM (gemini-2.5-flash)] -- generates response grounded in retrieved context
     |
     v
 [6. Response + Source Citations] -- answer with inline citations, source cards, embedded videos
@@ -83,7 +83,7 @@ The system prompt explicitly instructs the LLM to:
 
 ### 2. Temperature = 0
 
-The LLM (gpt-4.1-mini) is configured with `temperature=0`, which:
+The LLM (gemini-2.5-flash) is configured with `temperature=0`, which:
 - Makes responses deterministic (same input = same output)
 - Minimizes creative embellishment
 - Reduces hallucination risk
@@ -101,7 +101,7 @@ The response includes:
 ## Data Flow (Detailed)
 
 1. **User enters a health-related question** via the web UI, or **uploads a prescription image**
-2. **If prescription uploaded**: OpenAI Vision (gpt-4o) extracts medications, dosages, frequency, and conditions from the image. The extracted text is auto-sent as a chat message.
+2. **If prescription uploaded**: Google Gemini Vision (gemini-2.5-flash) extracts medications, dosages, frequency, and conditions from the image. The extracted text is auto-sent as a chat message.
 3. **Query contextualization**: If there is chat history, the query is rewritten into a standalone search query using the LLM.
 4. **Three parallel searches** are performed:
    - **Tavily Search** (whitelisted medical domains, max 5 results)
@@ -109,15 +109,15 @@ The response includes:
    - **Shorts/Reels Search** (Tavily on youtube.com + instagram.com, max 5 results)
 5. **Source verification**: Each result is individually verified by the LLM for relevance and reliability, producing a score (1-100). Articles require `is_reliable: true`; video sources use a lower threshold (score >= 30) since their text content is often minimal.
 6. **Context assembly**: Verified results are formatted with source labels and scores.
-7. **gpt-4.1-mini processes** the prompt and generates a response grounded only in the provided context, with inline [Source N] citations.
+7. **gemini-2.5-flash processes** the prompt and generates a response grounded only in the provided context, with inline [Source N] citations.
 8. **The response is displayed** in the web UI with source cards (reliability score bars), embedded YouTube/Instagram players, and fallback link pills for non-embeddable URLs.
 
 ## Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| LLM (Chat) | OpenAI gpt-4.1-mini | Response generation, verification, keyword extraction |
-| LLM (Vision) | OpenAI gpt-4o | Prescription OCR |
+| LLM (Chat) | Google gemini-2.5-flash | Response generation, verification, keyword extraction |
+| LLM (Vision) | Google gemini-2.5-flash | Prescription OCR |
 | Article Search | Tavily Search API | Domain-restricted medical web search |
 | Video Search | LangChain YouTubeSearchTool | YouTube video discovery |
 | Shorts/Reels Search | Tavily Search API | YouTube Shorts + Instagram Reels |
@@ -137,7 +137,7 @@ The response includes:
 
 1. Set environment variables in `.env`:
    ```
-   OPENAI_API_KEY=your-openai-api-key
+   GEMINI_API_KEY=your-gemini-api-key
    TAVILY_API_KEY=your-tavily-api-key
    ```
 2. Install dependencies: `pip install -r requirements.txt`
