@@ -9,10 +9,7 @@ from langchain_tavily import TavilySearch
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools import YouTubeSearchTool
-<<<<<<< Updated upstream
 from openai import AsyncOpenAI
-=======
->>>>>>> Stashed changes
 
 # Load environment variables (API keys)
 load_dotenv()
@@ -248,42 +245,6 @@ def _normalize_tavily_results(raw):
             normalized.append({"url": item, "content": ""})
     return normalized
 
-<<<<<<< Updated upstream
-async def search_trusted_sources(query: str) -> dict:
-    """Perform search, verify results, and return structured context and source URLs."""
-    print(f"\n[Searching Trusted Sources: {query}]...")
-    try:
-        # Step 1: Run Tavily medical search + keyword extraction in parallel
-        raw_results_task = tavily_search.ainvoke({"query": query})
-        yt_keywords_task = get_youtube_keywords(query)
-        raw_results, yt_keywords = await asyncio.gather(raw_results_task, yt_keywords_task)
-
-        results = _normalize_tavily_results(raw_results)
-
-        # Step 2: Run YouTube search + Shorts/Reels search in parallel (both need keywords)
-        print(f"[Searching Social Domains for: {query}]...")
-        print(f"  - Extracted YT Keywords: {yt_keywords}")
-        yt_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic OR official health)"
-        shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
-
-        yt_search_task = youtube_search.arun(f"{yt_query}, 3")
-        shorts_search_task = shorts_tavily.ainvoke({"query": shorts_query})
-        raw_yt_results, raw_shorts_results = await asyncio.gather(yt_search_task, shorts_search_task)
-        print(f"[Searching Short-Form Media for: {query}]...")
-
-        # Parse YouTube results
-        yt_links = []
-        try:
-            yt_links = ast.literal_eval(raw_yt_results) if isinstance(raw_yt_results, str) else []
-        except:
-            pass
-
-        social_results = [{"url": link, "content": f"YouTube video related to: {query}"} for link in yt_links]
-        shorts_results = [
-            {"url": doc.get("url", ""), "content": doc.get("content", f"Short-form video related to: {query}")}
-            for doc in _normalize_tavily_results(raw_shorts_results)
-        ]
-=======
 MAX_SOURCES = 5
 MIN_SOURCES = 2
 
@@ -324,35 +285,10 @@ def _select_diverse_sources(validated: list, max_total: int = MAX_SOURCES) -> li
     """
     all_sources = list(validated)
     all_sources.sort(key=lambda x: x.get("confidence_score", 0), reverse=True)
->>>>>>> Stashed changes
 
     if not all_sources:
         return []
 
-<<<<<<< Updated upstream
-        # Step 3: Verify ALL sources in parallel
-        print("[Verifying Source Reliability]...")
-        verification_tasks = [
-            verify_source_content(query, doc.get('url', 'Unknown source'), doc.get('content', ''))
-            for doc in all_results
-        ]
-        verifications = await asyncio.gather(*verification_tasks)
-
-        context_parts = []
-        source_urls = []
-        valid_source_count = 1
-
-        for doc, verification in zip(all_results, verifications):
-            url = doc.get('url', 'Unknown source')
-            content = doc.get('content', '')
-            source_type = "video" if ("youtube.com" in url or "instagram.com" in url) else "article"
-            score = verification["reliability_score"]
-            is_accepted = verification["is_reliable"] or (source_type == "video" and score >= 30)
-            if is_accepted:
-                context_parts.append(f"[Source {valid_source_count}]: {url} (Score: {score}/100)\nContent: {content}")
-                source_urls.append({"url": url, "score": score, "type": source_type})
-                valid_source_count += 1
-=======
     selected = []
     seen_domains = set()
 
@@ -380,7 +316,6 @@ def _select_diverse_sources(validated: list, max_total: int = MAX_SOURCES) -> li
             # Replace the lowest-scored article with the best video
             if len(selected) >= max_total:
                 selected[-1] = videos[0]
->>>>>>> Stashed changes
             else:
                 selected.append(videos[0])
 
