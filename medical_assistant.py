@@ -1,5 +1,7 @@
 import os
 import json
+import ast
+import asyncio
 import base64
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -7,7 +9,7 @@ from langchain_tavily import TavilySearch
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools import YouTubeSearchTool
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 # Load environment variables (API keys)
 load_dotenv()
@@ -52,7 +54,7 @@ shorts_tavily = TavilySearch(
 # Initialize LLM early so we can use it in search verification
 llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0) # Temperature 0 to reduce hallucination
 
-def get_youtube_keywords(query: str) -> str:
+async def get_youtube_keywords(query: str) -> str:
     """Extracts core medical keywords from a verbose user query for better YouTube search results."""
     prompt = f"""
     Extract the 2 to 3 most important core medical keywords or conditions from this user query.
@@ -60,16 +62,16 @@ def get_youtube_keywords(query: str) -> str:
     User Query: "{query}"
     """
     try:
-        keywords = llm.invoke(prompt).content.strip().replace('"', '').replace("'", "")
+        keywords = (await llm.ainvoke(prompt)).content.strip().replace('"', '').replace("'", "")
         return keywords if keywords else query
     except Exception:
         return query
 
-def contextualize_query(query: str, history: list) -> str:
+async def contextualize_query(query: str, history: list) -> str:
     """Uses the chat history to rewrite the user's latest query into a standalone search term if needed."""
     if not history:
         return query
-        
+
     chat_history_str = ""
     # Only use the last 4 messages for context to keep search focused and cheap
     for msg in history[-4:]:
@@ -79,23 +81,23 @@ def contextualize_query(query: str, history: list) -> str:
         if len(text) > 500:
             text = text[:500] + "..."
         chat_history_str += f"{role}: {text}\n"
-        
+
     prompt = f"""
-    Given the following chat history and a follow-up user query, 
-    rephrase the follow-up query to be a standalone search query that 
+    Given the following chat history and a follow-up user query,
+    rephrase the follow-up query to be a standalone search query that
     captures all relevant medical context from the history.
     If the follow-up query is already standalone, just return it exactly as is.
     Do NOT answer the query, only return the rephrased standalone query.
-    
+
     Chat History:
     {chat_history_str}
-    
+
     Follow-up query: {query}
-    
+
     Standalone query:"""
-    
+
     try:
-        standalone_query = llm.invoke(prompt).content.strip()
+        standalone_query = (await llm.ainvoke(prompt)).content.strip()
         # Clean up quotes if hallucinated
         if standalone_query.startswith('"') and standalone_query.endswith('"'):
             standalone_query = standalone_query[1:-1]
@@ -103,38 +105,38 @@ def contextualize_query(query: str, history: list) -> str:
     except Exception:
         return query
 
-def verify_source_content(query: str, url: str, content: str) -> dict:
+async def verify_source_content(query: str, url: str, content: str) -> dict:
     """
     Uses the LLM to verify if a single piece of retrieved content is actually relevant
     and reliable for the specific conditions mentioned in the user's query.
     Returns a dictionary with 'is_reliable' (bool) and 'reliability_score' (int).
     """
     verification_prompt = f"""
-    You are an expert medical content verifier. Your job is to determine if the provided text 
-    contains reliable, factual information that specifically addresses the conditions or 
+    You are an expert medical content verifier. Your job is to determine if the provided text
+    contains reliable, factual information that specifically addresses the conditions or
     symptoms mentioned in the user's query.
-    
+
     User Query: "{query}"
     Source URL: {url}
-    Content to verify: 
+    Content to verify:
     {content}
-    
+
     Evaluate the content based on factual density, clinical backing, and relevance.
     Note that video content (YouTube, Instagram) may have brief or incomplete descriptions;
     evaluate them fairly based on topical relevance rather than penalizing for brevity.
-    
+
     Respond ONLY with a valid JSON object in this exact format:
     {{"is_reliable": true/false, "reliability_score": <number 1-100>}}
-    
+
     Set is_reliable to true IF the content is topically relevant to the query and medically sound.
     """
     try:
-        response_text = llm.invoke(verification_prompt).content.strip()
+        response_text = (await llm.ainvoke(verification_prompt)).content.strip()
         if response_text.startswith("```json"):
             response_text = response_text[7:-3]
         elif response_text.startswith("```"):
             response_text = response_text[3:-3]
-            
+
         result = json.loads(response_text)
         return {
             "is_reliable": result.get("is_reliable", False),
@@ -160,65 +162,60 @@ def _normalize_tavily_results(raw):
             normalized.append({"url": item, "content": ""})
     return normalized
 
-def search_trusted_sources(query: str) -> dict:
+async def search_trusted_sources(query: str) -> dict:
     """Perform search, verify results, and return structured context and source URLs."""
     print(f"\n[Searching Trusted Sources: {query}]...")
     try:
-        raw_results = tavily_search.invoke({"query": query})
+        # Step 1: Run Tavily medical search + keyword extraction in parallel
+        raw_results_task = tavily_search.ainvoke({"query": query})
+        yt_keywords_task = get_youtube_keywords(query)
+        raw_results, yt_keywords = await asyncio.gather(raw_results_task, yt_keywords_task)
+
         results = _normalize_tavily_results(raw_results)
 
+        # Step 2: Run YouTube search + Shorts/Reels search in parallel (both need keywords)
         print(f"[Searching Social Domains for: {query}]...")
-        # Extract core keywords for better YouTube search volume
-        yt_keywords = get_youtube_keywords(query)
         print(f"  - Extracted YT Keywords: {yt_keywords}")
         yt_query = f"{yt_keywords} (Mayo Clinic OR Cleveland Clinic OR official health)"
-        raw_yt_results = youtube_search.run(f"{yt_query}, 3")
+        shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
 
-        # YouTubeSearchTool returns a string representation of a list: "['link1', 'link2']"
+        yt_search_task = youtube_search.arun(f"{yt_query}, 3")
+        shorts_search_task = shorts_tavily.ainvoke({"query": shorts_query})
+        raw_yt_results, raw_shorts_results = await asyncio.gather(yt_search_task, shorts_search_task)
+        print(f"[Searching Short-Form Media for: {query}]...")
+
+        # Parse YouTube results
         yt_links = []
-        import ast
         try:
             yt_links = ast.literal_eval(raw_yt_results) if isinstance(raw_yt_results, str) else []
         except:
             pass
 
-        social_results = []
-        for link in yt_links:
-            social_results.append({
-                "url": link,
-                "content": f"YouTube video related to: {query}"
-            })
-
-        print(f"[Searching Short-Form Media for: {query}]...")
-        # Search specifically for shorts and reels using the extracted keywords
-        shorts_query = f"{yt_keywords} health medical education (shorts OR reels)"
-        raw_shorts_results = shorts_tavily.invoke({"query": shorts_query})
-        shorts_results = []
-        for doc in _normalize_tavily_results(raw_shorts_results):
-            shorts_results.append({
-                "url": doc.get("url", ""),
-                "content": doc.get("content", f"Short-form video related to: {query}")
-            })
+        social_results = [{"url": link, "content": f"YouTube video related to: {query}"} for link in yt_links]
+        shorts_results = [
+            {"url": doc.get("url", ""), "content": doc.get("content", f"Short-form video related to: {query}")}
+            for doc in _normalize_tavily_results(raw_shorts_results)
+        ]
 
         all_results = results + social_results + shorts_results
+
+        # Step 3: Verify ALL sources in parallel
+        print("[Verifying Source Reliability]...")
+        verification_tasks = [
+            verify_source_content(query, doc.get('url', 'Unknown source'), doc.get('content', ''))
+            for doc in all_results
+        ]
+        verifications = await asyncio.gather(*verification_tasks)
 
         context_parts = []
         source_urls = []
         valid_source_count = 1
 
-        print("[Verifying Source Reliability]...")
-        for doc in all_results:
+        for doc, verification in zip(all_results, verifications):
             url = doc.get('url', 'Unknown source')
             content = doc.get('content', '')
-            
-            # Simple heuristic: if it's from YT/IG, it's a video
             source_type = "video" if ("youtube.com" in url or "instagram.com" in url) else "article"
-            
-            # Reliability Check: Is this specific snippet actually relevant/factual?
-            verification = verify_source_content(query, url, content)
             score = verification["reliability_score"]
-            # Video sources often have minimal text content, so use a lower threshold
-            # Articles must pass the LLM's is_reliable check; videos just need score >= 30
             is_accepted = verification["is_reliable"] or (source_type == "video" and score >= 30)
             if is_accepted:
                 context_parts.append(f"[Source {valid_source_count}]: {url} (Score: {score}/100)\nContent: {content}")
@@ -275,17 +272,17 @@ prompt = ChatPromptTemplate.from_messages([
 # LLM initialized above for use in verification
 
 # --- 5. Main Interaction Function ---
-def ask_health_assistant(query: str, history: list = None) -> dict:
+async def ask_health_assistant(query: str, history: list = None) -> dict:
     """Main function to interact with the assistant. Returns dict with response and sources."""
     try:
         history = history or []
         # Step 1: Contextualize the query against history so the search engine works properly
-        standalone_query = contextualize_query(query, history)
+        standalone_query = await contextualize_query(query, history)
         if standalone_query != query:
             print(f"\n[Contextualized Query for Search: '{standalone_query}']")
-            
+
         # Step 2: Search trusted sources using the standalone query
-        search_results = search_trusted_sources(standalone_query)
+        search_results = await search_trusted_sources(standalone_query)
         context = search_results["context"]
         source_urls = search_results["source_urls"]
 
@@ -300,20 +297,20 @@ def ask_health_assistant(query: str, history: list = None) -> dict:
 
         # Step 3: Format the prompt with context, query, and chat_history
         formatted_prompt = prompt.format_messages(
-            context=context, 
-            query=query, 
+            context=context,
+            query=query,
             chat_history=formatted_history
         )
 
-        # Step 3: Get LLM response
-        response = llm.invoke(formatted_prompt)
+        # Step 4: Get LLM response
+        response = await llm.ainvoke(formatted_prompt)
         response_text = response.content
 
         return {
             "response": response_text,
             "sources": source_urls
         }
-        
+
     except Exception as e:
         error_msg = f"System Error: Please ensure your API keys are set correctly. Error details: {e}"
         print(f"\n{error_msg}")
@@ -323,10 +320,10 @@ def ask_health_assistant(query: str, history: list = None) -> dict:
         }
 
 # --- 6. Prescription OCR Analysis ---
-def analyze_prescription(base64_images: list[str]) -> dict:
+async def analyze_prescription(base64_images: list[str]) -> dict:
     """Analyze one or more prescription images using OpenAI Vision and extract structured information."""
     try:
-        client = OpenAI()
+        client = AsyncOpenAI()
 
         image_count = len(base64_images)
         if image_count == 1:
@@ -348,7 +345,7 @@ def analyze_prescription(base64_images: list[str]) -> dict:
 
         max_tokens = min(1000 * image_count, 4000)
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {
@@ -380,17 +377,20 @@ def analyze_prescription(base64_images: list[str]) -> dict:
 
 # --- 7. Interactive Testing Loop ---
 if __name__ == "__main__":
-    print("\n" + "*" * 60)
-    print("Healthcare Information Assistant (Prototype)")
-    print("Type 'exit' or 'quit' to stop.")
-    print("Remember to set OPENAI_API_KEY and TAVILY_API_KEY in your environment or a .env file.")
-    print("*" * 60 + "\n")
+    async def main():
+        print("\n" + "*" * 60)
+        print("Healthcare Information Assistant (Prototype)")
+        print("Type 'exit' or 'quit' to stop.")
+        print("Remember to set OPENAI_API_KEY and TAVILY_API_KEY in your environment or a .env file.")
+        print("*" * 60 + "\n")
 
-    while True:
-        user_input = input("Ask a health-related question: ")
-        if user_input.lower() in ['exit', 'quit']:
-            break
-        if not user_input.strip():
-            continue
+        while True:
+            user_input = input("Ask a health-related question: ")
+            if user_input.lower() in ['exit', 'quit']:
+                break
+            if not user_input.strip():
+                continue
 
-        ask_health_assistant(user_input)
+            await ask_health_assistant(user_input)
+
+    asyncio.run(main())
