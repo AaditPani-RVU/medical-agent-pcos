@@ -77,6 +77,25 @@ shorts_tavily = TavilySearch(
     max_results=5
 )
 
+# --- Local Medical Dictionaries for Prescription Pipeline ---
+medical_terms_db = {
+    "tsh": "Thyroid Stimulating Hormone, a hormone used to evaluate thyroid function.",
+    "irregular menstrual cycle": "A menstrual cycle that does not occur at regular intervals.",
+    "ultrasound": "A medical imaging technique used to examine internal organs.",
+    "u/s": "Ultrasound, a medical imaging technique used to examine internal organs.",
+    "pcos": "Polycystic Ovary Syndrome, a hormonal disorder.",
+    "lh": "Luteinizing Hormone, a hormone associated with reproduction.",
+    "fsh": "Follicle-Stimulating Hormone, a hormone associated with reproduction."
+}
+
+medicine_db = {
+    "mif": "A medication sometimes prescribed in reproductive health contexts or vitamin supplementation (Myo-inositol / D-Chiro Inositol).",
+    "metformin": "A medication often used to treat type 2 diabetes and insulin resistance in PCOS.",
+    "letrozole": "A medication used to induce ovulation.",
+    "clomid": "A medication used to induce ovulation.",
+    "clomiphene": "A medication used to induce ovulation."
+}
+
 # --- Model Fallback Layer ---
 _active_model = "none"
 
@@ -530,10 +549,123 @@ prompt = ChatPromptTemplate.from_messages([
 # LLM initialized above for use in verification
 
 # --- 5. Main Interaction Function ---
+
+def run_prescription_pipeline(extracted_json_str: str) -> dict:
+    import json
+    try:
+        data = json.loads(extracted_json_str)
+    except Exception as e:
+        return {"context": "Failed to parse OCR data.", "source_urls": []}
+
+    output_lines = []
+    topics_for_search = []
+    
+    def _extract_text(item):
+        if isinstance(item, dict):
+            # Try to grab common keys the model might hallucinate
+            return str(item.get("name", item.get("condition", item.get("value", item.get("instruction", " ".join(str(v) for v in item.values()))))))
+        return str(item)
+
+    # Process Medicines
+    medicines = data.get("medicines", [])
+    if medicines:
+        output_lines.append("### Medicines\n")
+        for med in medicines:
+            med_str = _extract_text(med)
+            med_lower = med_str.lower().strip()
+            explanation = "A medication name was detected in the prescription."
+            for key, val in medicine_db.items():
+                if key in med_lower:
+                    explanation = val
+                    topics_for_search.append(key)
+                    break
+            output_lines.append(f"- **{med_str}**\n  *Explanation: {explanation}*\n")
+
+    # Process Conditions
+    conditions = data.get("conditions", [])
+    if conditions:
+        output_lines.append("### Conditions\n")
+        for cond in conditions:
+            cond_str = _extract_text(cond)
+            cond_lower = cond_str.lower().strip()
+            explanation = "This may refer to a medical condition or symptom."
+            for key, val in medical_terms_db.items():
+                if key in cond_lower:
+                    explanation = val
+                    topics_for_search.append(key)
+                    break
+            output_lines.append(f"- **{cond_str}**\n  *Explanation: {explanation}*\n")
+
+    # Process Lab Values
+    labs = data.get("lab_values", [])
+    if labs:
+        output_lines.append("### Lab Values\n")
+        for lab in labs:
+            lab_str = _extract_text(lab)
+            lab_lower = lab_str.lower().strip()
+            explanation = "This value is commonly associated with laboratory test results."
+            for key, val in medical_terms_db.items():
+                if key in lab_lower:
+                    explanation = f"This test is often used to evaluate {key.upper()}: {val}"
+                    topics_for_search.append(key)
+                    break
+            output_lines.append(f"- **{lab_str}**\n  *Explanation: {explanation}*\n")
+
+    # Process Doctor Instructions
+    instructions = data.get("doctor_instructions", [])
+    if instructions:
+        output_lines.append("### Doctor Instructions\n")
+        for inst in instructions:
+            inst_str = _extract_text(inst)
+            inst_lower = inst_str.lower().strip()
+            explanation = "An instruction noted by the doctor."
+            for key, val in medical_terms_db.items():
+                if key in inst_lower:
+                    explanation = val
+                    topics_for_search.append(key)
+                    break
+            output_lines.append(f"- **{inst_str}**\n  *Explanation: {explanation}*\n")
+
+    disclaimer = "\n> **Disclaimer:** This information is educational and does not replace professional medical advice. Always consult your healthcare provider for actual medical interpretation and treatment."
+    
+    output_lines.append(disclaimer)
+    context = "\n".join(output_lines)
+    
+    # Fetch optional references using Tavily via search_trusted_sources
+    source_urls = []
+    if topics_for_search:
+        search_query = " ".join(topics_for_search[:2]) + " meaning explanation"
+        results = search_trusted_sources(search_query)
+        source_urls = results.get("source_urls", [])
+
+    return {
+        "context": context,
+        "source_urls": source_urls
+    }
+
 async def ask_health_assistant(query: str, history: list = None) -> dict:
     """Main function to interact with the assistant. Returns dict with response and sources."""
     try:
         history = history or []
+        
+        if query.startswith("I uploaded my prescription"):
+            # Extract JSON from the query
+            import re
+            match = re.search(r"Here is what was extracted:\n\n(.*?)\n\nPlease explain", query, re.DOTALL)
+            if match:
+                extracted_json_str = match.group(1).strip()
+                # Run the targeted prescription pipeline
+                result = run_prescription_pipeline(extracted_json_str)
+                return {
+                    "response": result["context"],
+                    "sources": result["source_urls"]
+                }
+            else:
+                return {
+                    "response": "Error: Could not parse prescription data. Please ensure it was successfully extracted.",
+                    "sources": []
+                }
+
         # Step 1: Contextualize the query against history so the search engine works properly
         standalone_query = await contextualize_query(query, history)
         if standalone_query != query:
@@ -605,19 +737,24 @@ async def analyze_prescription(base64_images: list[str]) -> dict:
 
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
+            response_format={ "type": "json_object" },
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a medical prescription reader. Analyze the prescription image(s) and extract:\n"
-                        "1. List of medicines with their dosages and frequency\n"
-                        "2. Any diagnosis or condition mentioned\n"
-                        "3. Doctor's instructions if visible\n\n"
+                        "You are a medical prescription reader. Analyze the prescription image(s) and extract the information into a strict JSON format.\n"
+                        "Return ONLY a JSON object with this exact structure:\n"
+                        "{\n"
+                        '  "medicines": [],\n'
+                        '  "conditions": [],\n'
+                        '  "lab_values": [],\n'
+                        '  "doctor_instructions": []\n'
+                        "}\n\n"
                         "If multiple images are provided, they may be pages of the same prescription or separate prescriptions. "
-                        "Handle both cases appropriately.\n\n"
-                        "Format your response clearly with sections. "
+                        "Handle both cases appropriately.\n"
                         "Do NOT provide medical advice or interpretations beyond what is written."
                     )
+
                 },
                 {
                     "role": "user",

@@ -1,0 +1,45 @@
+﻿{
+    "response":  "### Medicines\n\n- **metformin**\n  *Explanation: A medication often used to treat type 2 diabetes and insulin resistance in PCOS.*\n\n- **MIF 24**\n  *Explanation: A medication sometimes prescribed in reproductive health contexts or vitamin supplementation (Myo-inositol / D-Chiro Inositol).*\n\n### Conditions\n\n- **pcos**\n  *Explanation: Polycystic Ovary Syndrome, a hormonal disorder.*\n\n- **irregular menstrual cycle**\n  *Explanation: A menstrual cycle that does not occur at regular intervals.*\n\n### Lab Values\n\n- **tsh \u003e 21**\n  *Explanation: This test is often used to evaluate TSH: Thyroid Stimulating Hormone, a hormone used to evaluate thyroid function.*\n\n### Doctor Instructions\n\n- **u/s**\n  *Explanation: Ultrasound, a medical imaging technique used to examine internal organs.*\n\n- **normal uterine contour**\n  *Explanation: An instruction noted by the doctor.*\n\n\n\u003e **Disclaimer:** This information is educational and does not replace professional medical advice. Always consult your healthcare provider for actual medical interpretation and treatment.",
+    "sources":  [
+                    {
+                        "url":  "https://pmc.ncbi.nlm.nih.gov/articles/PMC5994909/",
+                        "score":  95,
+                        "type":  "article",
+                        "title":  "Metformin and Autoimmunity: A âNew Dealâ of an Old Drug - PMC",
+                        "source_label":  "National Institutes of Health",
+                        "confidence_level":  "HIGH"
+                    },
+                    {
+                        "url":  "https://www.nhs.uk/medicines/metformin/",
+                        "score":  95,
+                        "type":  "article",
+                        "title":  "Metformin: a medicine to treat type 2 diabetes - NHS",
+                        "source_label":  "NHS (UK)",
+                        "confidence_level":  "HIGH"
+                    },
+                    {
+                        "url":  "https://www.mayoclinic.org/drugs-supplements/metformin-oral-route/description/drg-20067074",
+                        "score":  95,
+                        "type":  "article",
+                        "title":  "Metformin (oral route) - Side effects \u0026 dosage - Mayo Clinic",
+                        "source_label":  "Mayo Clinic",
+                        "confidence_level":  "HIGH"
+                    },
+                    {
+                        "url":  "https://my.clevelandclinic.org/health/drugs/20966-metformin-tablets",
+                        "score":  95,
+                        "type":  "article",
+                        "title":  "Metformin (Glucophage): Type 2 Diabetes - Cleveland Clinic",
+                        "source_label":  "Cleveland Clinic",
+                        "confidence_level":  "HIGH"
+                    },
+                    {
+                        "url":  "https://www.youtube.com/watch?v=4AmiqM6iy8A",
+                        "score":  65,
+                        "type":  "video",
+                        "title":  "METFORMIN for DIABETES | Doses, side effects \u0026 more ... - YouTube",
+                        "source_label":  "YouTube",
+                        "confidence_level":  "MEDIUM"
+                    }
+                ]
+}
