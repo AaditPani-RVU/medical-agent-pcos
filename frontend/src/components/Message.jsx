@@ -29,7 +29,7 @@ const getVideoEmbedUrl = (url) => {
   return null;
 };
 
-const Message = ({ role, content, sources = [], imageUrl }) => {
+const Message = ({ role, content, sources = [], imageUrl, imageUrls }) => {
   const isUser = role === 'user';
 
   // Basic styling for the markdown returned by the backend
@@ -86,7 +86,14 @@ const Message = ({ role, content, sources = [], imageUrl }) => {
             ? "bg-blue-900/30 border-blue-700/40 rounded-tr-sm" 
             : "bg-slate-800/40 border-slate-700/50 rounded-tl-sm"
         )}>
-          {imageUrl && (
+          {imageUrls && imageUrls.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {imageUrls.map((url, i) => (
+                <img key={i} src={url} alt={`Uploaded prescription ${i + 1}`} className="max-w-[200px] max-h-[200px] rounded-lg border border-slate-600/50 object-cover" />
+              ))}
+            </div>
+          )}
+          {imageUrl && !imageUrls && (
             <div className="mb-3">
               <img src={imageUrl} alt="Uploaded prescription" className="max-w-[200px] max-h-[200px] rounded-lg border border-slate-600/50 object-cover" />
             </div>

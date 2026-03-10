@@ -21,17 +21,17 @@ const App = () => {
     scrollToBottom();
   }, [messages, isLoading]);
 
-  const handlePrescriptionUpload = async (file) => {
+  const handlePrescriptionUpload = async (files) => {
     setIsUploading(true);
-    const imageUrl = URL.createObjectURL(file);
+    const imageUrls = files.map(f => URL.createObjectURL(f));
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      files.forEach(f => formData.append('files', f));
       const uploadRes = await axios.post('http://localhost:8000/api/upload_prescription', formData);
       const extractedText = uploadRes.data.extracted_text;
-      const query = `I uploaded my prescription. Here is what was extracted:\n\n${extractedText}\n\nPlease explain the medications and any conditions mentioned.`;
+      const query = `I uploaded my prescription${files.length > 1 ? ` (${files.length} images)` : ''}. Here is what was extracted:\n\n${extractedText}\n\nPlease explain the medications and any conditions mentioned.`;
 
-      const userMessage = { role: 'user', content: query, imageUrl };
+      const userMessage = { role: 'user', content: query, imageUrls };
       setMessages(prev => [...prev, userMessage]);
       setIsUploading(false);
       setIsLoading(true);
@@ -111,7 +111,7 @@ const App = () => {
       <main className="flex-1 overflow-y-auto w-full mx-auto px-2 md:px-0 py-6 scrollbar-hide relative z-10 flex flex-col">
         <AnimatePresence>
           {messages.map((msg, idx) => (
-            <Message key={idx} role={msg.role} content={msg.content} sources={msg.sources} imageUrl={msg.imageUrl} />
+            <Message key={idx} role={msg.role} content={msg.content} sources={msg.sources} imageUrl={msg.imageUrl} imageUrls={msg.imageUrls} />
           ))}
         </AnimatePresence>
 

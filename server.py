@@ -45,16 +45,22 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
 @app.post("/api/upload_prescription")
-async def upload_prescription(file: UploadFile = File(...)):
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported.")
+async def upload_prescription(files: list[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
 
-    contents = await file.read()
-    if len(contents) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="File size exceeds 10MB limit.")
+    base64_images = []
+    for file in files:
+        if file.content_type not in ALLOWED_TYPES:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}': Only JPEG, PNG, and WebP images are supported.")
 
-    base64_image = base64.b64encode(contents).decode("utf-8")
-    result = analyze_prescription(base64_image)
+        contents = await file.read()
+        if len(contents) > MAX_SIZE:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' exceeds 10MB limit.")
+
+        base64_images.append(base64.b64encode(contents).decode("utf-8"))
+
+    result = analyze_prescription(base64_images)
 
     if not result["success"]:
         raise HTTPException(status_code=500, detail=f"OCR failed: {result['error']}")

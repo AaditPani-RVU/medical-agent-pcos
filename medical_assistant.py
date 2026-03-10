@@ -323,36 +323,53 @@ def ask_health_assistant(query: str, history: list = None) -> dict:
         }
 
 # --- 6. Prescription OCR Analysis ---
-def analyze_prescription(base64_image: str) -> dict:
-    """Analyze a prescription image using OpenAI Vision and extract structured information."""
+def analyze_prescription(base64_images: list[str]) -> dict:
+    """Analyze one or more prescription images using OpenAI Vision and extract structured information."""
     try:
         client = OpenAI()
+
+        image_count = len(base64_images)
+        if image_count == 1:
+            prompt_text = "Please read and extract all information from this prescription image."
+        else:
+            prompt_text = (
+                f"I am uploading {image_count} images. They may be multiple pages of the same prescription "
+                "or separate prescriptions. Please read and extract all information from every image. "
+                "If they appear to be pages of the same prescription, combine the information. "
+                "If they are separate prescriptions, clearly label each one."
+            )
+
+        content = [{"type": "text", "text": prompt_text}]
+        for img in base64_images:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img}"}
+            })
+
+        max_tokens = min(1000 * image_count, 4000)
+
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a medical prescription reader. Analyze the prescription image and extract:\n"
+                        "You are a medical prescription reader. Analyze the prescription image(s) and extract:\n"
                         "1. List of medicines with their dosages and frequency\n"
                         "2. Any diagnosis or condition mentioned\n"
                         "3. Doctor's instructions if visible\n\n"
+                        "If multiple images are provided, they may be pages of the same prescription or separate prescriptions. "
+                        "Handle both cases appropriately.\n\n"
                         "Format your response clearly with sections. "
                         "Do NOT provide medical advice or interpretations beyond what is written."
                     )
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Please read and extract all information from this prescription image."},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                        }
-                    ]
+                    "content": content
                 }
             ],
-            max_tokens=1000,
+            max_tokens=max_tokens,
             temperature=0
         )
         extracted_text = response.choices[0].message.content

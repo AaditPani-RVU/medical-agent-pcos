@@ -5,15 +5,15 @@ import { cn } from './Message';
 
 const ChatInput = ({ onSend, onUpload, isLoading, isUploading }) => {
   const [input, setInput] = useState('');
-  const [preview, setPreview] = useState(null);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [previews, setPreviews] = useState([]);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (selectedFile) {
-      onUpload(selectedFile);
-      clearFile();
+    if (selectedFiles.length > 0) {
+      onUpload(selectedFiles);
+      clearFiles();
       return;
     }
     if (input.trim() && !isLoading) {
@@ -30,36 +30,46 @@ const ChatInput = ({ onSend, onUpload, isLoading, isUploading }) => {
   };
 
   const handleFileSelect = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setSelectedFile(file);
-    setPreview(URL.createObjectURL(file));
+    const newFiles = Array.from(e.target.files || []);
+    if (newFiles.length === 0) return;
+    setSelectedFiles(prev => [...prev, ...newFiles]);
+    setPreviews(prev => [...prev, ...newFiles.map(f => URL.createObjectURL(f))]);
     e.target.value = '';
   };
 
-  const clearFile = () => {
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(null);
-    setSelectedFile(null);
+  const removeFile = (index) => {
+    URL.revokeObjectURL(previews[index]);
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+    setPreviews(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const clearFiles = () => {
+    previews.forEach(p => URL.revokeObjectURL(p));
+    setPreviews([]);
+    setSelectedFiles([]);
   };
 
   const busy = isLoading || isUploading;
 
   return (
     <div className="w-full max-w-4xl mx-auto px-4 pb-6 pt-2 sticky bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/90 to-transparent">
-      {/* Image Preview */}
-      {preview && (
-        <div className="mb-2 flex items-start gap-2 px-2">
-          <div className="relative">
-            <img src={preview} alt="Preview" className="w-20 h-20 object-cover rounded-xl border border-slate-600/50" />
-            <button
-              onClick={clearFile}
-              className="absolute -top-1.5 -right-1.5 bg-slate-700 border border-slate-600 rounded-full p-0.5 text-slate-300 hover:text-white hover:bg-red-600 transition-colors"
-            >
-              <X size={12} />
-            </button>
-          </div>
-          <span className="text-xs text-slate-400 mt-1">Prescription image ready to upload</span>
+      {/* Image Previews */}
+      {previews.length > 0 && (
+        <div className="mb-2 flex items-start gap-2 px-2 flex-wrap">
+          {previews.map((src, i) => (
+            <div key={i} className="relative">
+              <img src={src} alt={`Preview ${i + 1}`} className="w-20 h-20 object-cover rounded-xl border border-slate-600/50" />
+              <button
+                onClick={() => removeFile(i)}
+                className="absolute -top-1.5 -right-1.5 bg-slate-700 border border-slate-600 rounded-full p-0.5 text-slate-300 hover:text-white hover:bg-red-600 transition-colors"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          <span className="text-xs text-slate-400 mt-1 self-end">
+            {previews.length} prescription image{previews.length > 1 ? 's' : ''} ready to upload
+          </span>
         </div>
       )}
 
@@ -87,6 +97,7 @@ const ChatInput = ({ onSend, onUpload, isLoading, isUploading }) => {
             ref={fileInputRef}
             type="file"
             accept="image/jpeg,image/png,image/webp"
+            multiple
             onChange={handleFileSelect}
             className="hidden"
           />
@@ -96,7 +107,7 @@ const ChatInput = ({ onSend, onUpload, isLoading, isUploading }) => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={selectedFile ? "Press Enter to analyze prescription..." : "Ask a health-related question..."}
+          placeholder={selectedFiles.length > 0 ? "Press Enter to analyze prescription..." : "Ask a health-related question..."}
           className="w-full bg-transparent text-slate-100 placeholder:text-slate-400 p-4 pl-0 min-h-[56px] max-h-48 resize-none focus:outline-none scrollbar-hide"
           rows={1}
           disabled={busy}
@@ -107,10 +118,10 @@ const ChatInput = ({ onSend, onUpload, isLoading, isUploading }) => {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             type="submit"
-            disabled={(!input.trim() && !selectedFile) || busy}
+            disabled={(!input.trim() && selectedFiles.length === 0) || busy}
             className={cn(
               "flex items-center justify-center rounded-full p-3 transition-colors duration-200 shadow-md",
-              (input.trim() || selectedFile) && !busy
+              (input.trim() || selectedFiles.length > 0) && !busy
                 ? "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/40 cursor-pointer"
                 : "bg-slate-700/50 text-slate-500 cursor-not-allowed border border-slate-600/30"
             )}
